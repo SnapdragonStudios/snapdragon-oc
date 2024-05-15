@@ -3,10 +3,17 @@
 /local.properties
 /.idea/caches
 /.idea/libraries
+/.idea/codeStyles
+/.idea/inspectionProfiles
 /.idea/modules.xml
 /.idea/workspace.xml
 /.idea/navEditor.xml
 /.idea/assetWizardSettings.xml
+/.idea/compiler.xml
+/.idea/encodings.xml
+/.idea/jarRepositories.xml
+/.idea/misc.xml
+/.idea/.gitignore
 .DS_Store
 /build
 /captures
@@ -19,14 +26,8 @@ app/release/
 keys.jks
 .idea/gradle.xml
 distribution/
-QOC_Data/
-QOC_Introduction_Oct 2019.pptx
 app/FuzzyCulling/.vscode/
 oc_data/
-FR55429-Display\ Smooth\ Motion\ For\ Gaming\ .docx
-FR60012-Qualcomm\ Occlusion\ Culling.docx
-QOC\ Usage/
-QOC_API.Dec.pptx
 app/.cxx/
 app/FuzzyCulling/build
 .vs/
