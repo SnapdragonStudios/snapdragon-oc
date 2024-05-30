@@ -2094,7 +2094,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 		int tillQuadFinish = quadBatchNum * 6 + 2;
 		int compressSize = tillQuadFinish + (triangleBatchNum * 5) - (triangleBatchNum >> 1);
 		if (common::bEnableCompressMode) {
-			compressSize = quadBatchNum * 32 + triangleBatchNum * 24 + quadData.nActiveVerts * 3 * 2 + 16 * 2;// +1000;
+			compressSize = quadBatchNum * 32 + triangleBatchNum * 24 + quadData.nActiveVerts * 3 + 16 * 2;// +1000;
 		}
 
 		util::OccluderBakeBuffer* pBakeBuffer = gBakeBuffer;

@@ -200,7 +200,7 @@ Rasterizer::Rasterizer()
 	else 
 	{
 		float one16 = 1.0f / 16;
-		xFactors[0] = _mm_setr_ps(0.375f + one16, 0.875f + one16, 0.375f, 0.875f + one16);
+		xFactors[0] = _mm_setr_ps(0.375f + one16, 0.875f + one16, 0.375f + one16, 0.875f + one16);
 		xFactors[1] = _mm_setr_ps(0 + one16, .5f + one16, 00 + one16, 0.5f + one16);
 	}
 
@@ -3025,6 +3025,9 @@ static int GetValidPrimitiveNum(__m128 primitiveValid)
 }
 
 
+static inline __m128 _mm_rcp_ps_div(__m128 _A) {
+	return _mm_div_ps(_mm_set1_ps(1.0), _A);
+}
 //draw convex quad, bPixelAABBClippingQuad is always TRUE for correctness
 template <bool bPixelAABBClippingQuad>
 void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128 primitiveValid, __m128* edgeNormalsX, __m128* edgeNormalsY, __m128* areas)
@@ -3245,7 +3248,7 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 	__m128 maxArea = _mm_max_ps(areas[1], areas[0]);
 	__m128 greaterArea = _mm_cmpeq_ps(maxArea, areas[1]);
 
-	__m128 invArea = _mm_rcp_ps(maxArea);
+	__m128 invArea = _mm_rcp_ps_div(maxArea);
 
 
 	__m128 z12 = _mm_sub_ps(z[1], z[2]);
@@ -3353,7 +3356,7 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 		int xIncrease = (int)(depthPlaneData[4] > 0);
 		int yIncrease = (int)(slope > 0);
 		//data: btmLeft 0 btmRight 0 topleft 0 topright 0
-		int maxBlockIdx = ((xIncrease << 1) | yIncrease) << 1;
+		int maxBlockIdx = (xIncrease + yIncrease * 2) << 1;
 		int minBlockIdx = 6 ^ maxBlockIdx;
 
 		//***********************************************************
@@ -5476,7 +5479,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 	}
 	else
 	{
-		invArea = _mm_rcp_ps(negativeArea);
+		invArea = _mm_rcp_ps_div(negativeArea);
 		invArea = _mm_mul_ps(invArea, mOccluderCache.NegativeC1);
 	}
 
@@ -5671,7 +5674,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 		int xIncrease = (int)(depthPlaneData[4] > 0);
 		int yIncrease = (int)(slope > 0);
 		//data16: btmLeft 0 1 btmRight 2 3 topleft 4 5 topright 6 7
-		int	maxBlockIdx = (xIncrease << 1) | (yIncrease << 2);
+		int maxBlockIdx = (xIncrease + yIncrease * 2) << 1;
 		int	minBlockIdx = 6 ^ maxBlockIdx;
 
 
