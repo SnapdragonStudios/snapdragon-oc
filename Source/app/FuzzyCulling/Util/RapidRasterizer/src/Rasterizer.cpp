@@ -64,7 +64,7 @@ namespace util
 	static constexpr bool bFrustumCullIfClip = true; 
 
 
-	static constexpr bool bDepthAtCenterOptimization = true; //save one _mm_sub_ps for X
+	static constexpr bool bDepthAtCenterOptimization = false; //save one _mm_sub_ps for X, turn on would introduce vertical 1 pixel error!
 
 	//Use branch to fast check whether occluder local to world transform having scales..
 	static constexpr bool bFastSetUpMatOp = true;
@@ -2347,7 +2347,8 @@ static void normalizeEdge(__m128 &nx, __m128 &ny, __m128 &invLen)
 static __m128i quantizeSlopeLookup(__m128 nx, __m128 ny)
 {
 	__m128i yNeg2 = _mm_castps_si128(ny);
-	auto yNegI2 = _mm_slli_epi32(_mm_srli_epi32(yNeg2, 31), OFFSET_QUANTIZATION_BITS);
+	auto yNegI2 = _mm_srli_epi32(yNeg2, 31 - OFFSET_QUANTIZATION_BITS);
+
 
     ////// Remap [-1, 1] to [0, SLOPE_QUANTIZATION / 2]
     //constexpr float mul = (SLOPE_QUANTIZATION_FACTOR / 2 - 1) * 0.5f;  //15.5
@@ -2382,7 +2383,7 @@ static __m128i quantizeSlopeLookup(__m128 nx, __m128 ny)
 		__m128i quantizedSlope = _mm_cvttps_epi32(_mm_fmadd_ps_soc(nx, mul, _mm_set1_ps(add)));
 		quantizedSlope = _mm_srli_epi32(quantizedSlope, 7);
 		quantizedSlope = _mm_slli_epi32(quantizedSlope, 7);
-		return _mm_or_si128(quantizedSlope, yNegI2);
+		return _mm_and_si128(_mm_or_si128(quantizedSlope, yNegI2), _mm_set1_epi32(4032));
 	}
 	else {
 		//16.0f / 15.5f = 1.03225806452
@@ -2391,7 +2392,7 @@ static __m128i quantizeSlopeLookup(__m128 nx, __m128 ny)
 		__m128i quantizedSlope = _mm_castps_si128(_mm_fmadd_ps_soc(nx, 3.55862547612e-40, _mm_set1_ps(3.67341984632e-40)));
 		quantizedSlope = _mm_srli_epi32(quantizedSlope, 14);
 		auto q2 = _mm_slli_epi32(quantizedSlope, OFFSET_QUANTIZATION_BITS + 1);
-		return _mm_or_si128(q2, yNegI2);
+		return _mm_and_si128(_mm_or_si128(q2, yNegI2), _mm_set1_epi32(4032));
 	}
 
 

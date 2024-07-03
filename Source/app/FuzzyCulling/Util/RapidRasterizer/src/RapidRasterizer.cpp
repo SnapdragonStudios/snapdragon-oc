@@ -514,7 +514,6 @@ void RapidRasterizer::FlushCachedOccluder(int endOccluderNum)
 				OccluderInput* occ = mOccluderCenter->mPool[idx];
 				if (occ->priority < 2)
 				{
-					OccluderInput* occ = mOccluderCenter->mPool[idx];
 					occ->potentialVisible = RasterizeOccluder(occ);
 				}
 			}
@@ -525,7 +524,6 @@ void RapidRasterizer::FlushCachedOccluder(int endOccluderNum)
 			OccluderInput* occ = mOccluderCenter->mPool[idx];
 			if (occ->priority >= LargeTerrainOccluderPriority)
 			{
-				OccluderInput* occ = mOccluderCenter->mPool[idx];
 				occ->potentialVisible = RasterizeOccluder(occ);
 			}
 		}
