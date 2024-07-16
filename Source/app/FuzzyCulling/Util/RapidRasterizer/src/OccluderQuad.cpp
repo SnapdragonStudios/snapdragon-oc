@@ -31,9 +31,51 @@
 #if defined(SDOC_NATIVE)
 #include "Util/RapidRasterizer/MeshReducer.h"
 #include "SOCUtil.h"
+#include <unordered_map>
 #endif
 namespace util
 {
+	//***************************************
+	//Mesh Baking Process
+	//1. Duplicate vertices checking and removal
+	//2. Quad formation such that the common edge is longest in Quad's two triangles
+	//3. Quad formation as long as the quad is convex
+	//4. Simple planar mesh checking and simplification, detect whether it is a simple rectangle or a simple general topological disk such as a filled circle
+	//5. Quad merging for terrain
+	//6. Quad merging for normal mesh round 1: merge rectangle quad
+	//7. Quad merging for normal mesh round 2~5: merge general planar quad
+	//8. Merge Triangle into Quad
+	//9. Output baked data in following order
+	//   Add baked data header
+	//   Add baked data indices, compress the final mesh's indices array if vertices number is less than 85
+	//   Add baked data's vertices
+	
+	static bool SaveSimplifyModel = false;
+	static std::string outputSaveDirectory = "D:\\TempSDOC";
+	//******************************************************************************
+	static constexpr bool  AllowSecondRoundQuadMerge = true;  //set to false to disable second round quad formation
+	static constexpr bool  AllowFreeMergeForMesh = true;
+	//developer todo: tunning the ratio, approaching one would means smaller error
+	static float GetSecondRoundCosQuadAngle(float cosQuadAngle) {
+		if (AllowSecondRoundQuadMerge == false) return 2.0;
+		float degreeToRadian = 3.1415926f / 180.0f;
+		//return cos(15 * degreeToRadian);
+		return cosQuadAngle;            //same condition with longest edge quad
+	}
+	static float GetSecondRoundQuadTwoFaceFreeMerge(float QuadTwoSameFaceTh) {
+		float degreeToRadian = 3.1415926f / 180.0f;
+		return cos(1.0f * degreeToRadian);
+	}
+	
+	static float GetSecondRoundPlanarTh() {
+		float degreeToRadian = 3.1415926f / 180.0f;
+		return cos(1.0f * degreeToRadian);
+	}
+	static float GetSecondRoundQuadMergeLineLinkMerge(float lineLinkTh) {		
+		float degreeToRadian = 3.1415926f / 180.0f;
+		return cos(1.0f * degreeToRadian);
+	}
+
 	static int gDelayTerrainOccluderVertTh = 256;
 
 	static float RightAngleUnitDotTh = 0; 
@@ -52,8 +94,6 @@ namespace util
 	static constexpr float  ModelRectangleMergeAngle = 1.1f;  // treat face normal angle smaller than 1.1 as plane quad
 
 
-	static bool SaveSimplifyModel =  false;
-	static std::string outputSaveDirectory = "D:\\TempSDOC";
 
 	void OccluderQuad::ConfigControlParameters(bool isTerrain)
 	{
@@ -71,8 +111,9 @@ namespace util
 		{
 			//very strict controlling parameters
 			RightAngleUnitDotTh = cos(ModelRectangleAngle * degreeToRadian);; // cos(89f * 3.1415926f / 180);
-			ProjectLineMidAngleTh = cos(3 * degreeToRadian); //cos(3 degree)
-			PlaneQuadDotThreshold = QuadFourSameFaceTh = QuadTwoSameFaceTh = cos(ModelRectangleMergeAngle * degreeToRadian); 
+			ProjectLineMidAngleTh = cos(3.0f * degreeToRadian); //cos(3 degree)
+			 QuadFourSameFaceTh = QuadTwoSameFaceTh = cos(ModelRectangleMergeAngle * degreeToRadian);
+			PlaneQuadDotThreshold = cos(0.2f * degreeToRadian);   //for mesh apply strict check
 
 		}
 	}
@@ -95,6 +136,22 @@ namespace util
 	static bool bSimplifyMesh = 1;
 
 	static int DebugOccluderIdx = 0;
+	static int DebugOccluderID = 0;
+	static std::string GetDebugOccluderKey(QuadTriIndex& qti) {
+		return std::to_string(DebugOccluderIdx++)+"_" +std::to_string(DebugOccluderID) +
+			"_" + std::to_string(qti.nQuads / 4) + "_" + std::to_string(qti.nTriangles / 3) +"_" + std::to_string(qti.splitOneQuadToTriangles);
+	}
+
+	static void savePoint(FILE* fileWriter, const float* p)
+	{
+		fprintf(fileWriter, "%f %f %f\n",
+			p[0], p[1], p[2]);
+	}
+	static void saveTriangle(FILE* fileWriter, const uint16_t* p)
+	{
+		fprintf(fileWriter, "3 %d %d %d\n",
+			p[0], p[2], p[1]);
+	}
 
 	//add here to dump model and simplified model
 	bool OccluderQuad::storeModel(const std::string &file_path,
@@ -114,18 +171,12 @@ namespace util
 
 		for (int i_vert = 0; i_vert < nVert; ++i_vert)
 		{
-			fprintf(fileWriter, "%f %f %f\n",
-				vertices[i_vert * 3],
-				vertices[(i_vert * 3) + 1],
-				vertices[(i_vert * 3) + 2]);
+			savePoint(fileWriter, vertices + i_vert * 3);
 		}
 
 		for (unsigned int i_face = 0; i_face < nFace; ++i_face)
 		{
-			fprintf(fileWriter, "3 %d %d %d\n",
-				indices[i_face * 3],
-				indices[i_face * 3 + 1],
-				indices[i_face * 3 + 2]);
+			saveTriangle(fileWriter, indices+i_face * 3);
 		}
 		fclose(fileWriter);
 
@@ -159,7 +210,7 @@ namespace util
 		target = _mm_add_ps(b, _mm_mul_ps(unitAB, _mm_set1_ps(projLen)));
 	}
 
-	void  OccluderQuad::checkRectangleQuad(MeshQuad * q, __m128*vertices)
+	void  OccluderQuad::checkRectangleQuad(MeshQuad* q, __m128* vertices)
 	{
 		__m128 p0 = vertices[q->vIdx[0]];
 		__m128 p1 = vertices[q->vIdx[1]];
@@ -179,16 +230,6 @@ namespace util
 		q->IsRectangle = dot0 < RightAngleUnitDotTh && dot1 < RightAngleUnitDotTh &&dot2 < RightAngleUnitDotTh && dot3 < RightAngleUnitDotTh;
 	}
 
-
-	static util::OccluderBakeBuffer* gBakeBuffer = new util::OccluderBakeBuffer();
-
-	void OccluderQuad::OfflineTestClearBakeBuffer()
-	{
-		if (gBakeBuffer != nullptr) {
-			delete gBakeBuffer;
-			gBakeBuffer = nullptr;
-		}
-	}
 
 	void OccluderQuad::HandleSquareTerrainInput(OccluderBakeBuffer* pBakeBuffer, const uint16_t* indices, unsigned int nIdx, const float* inputVertices, int nVert, QuadTriIndex & qti, float quadAngle, int squareTerrainXPoints)
 	{
@@ -335,7 +376,7 @@ namespace util
 	static void CreateOutputDir() {
 #if defined(SDOC_WIN)
 	_mkdir(outputSaveDirectory.c_str());
-#elif
+#else
 std::system(("mkdir " + outputSaveDirectory).c_str());
 #endif
 	}
@@ -465,96 +506,66 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 	}
 
 
-	static int gMaxVertNum = 1;
-	static int gMaxIndexNum = 1;
-	static int gMaxFaceNum = 1;
-	void OccluderQuad::SetMaxVertIndexNum(int* value)
-	{
-		gMaxVertNum = std::max<int>(gMaxVertNum, value[0]);
-		gMaxIndexNum = std::max<int>(gMaxIndexNum, value[1]);
-
-		//****************************************************
-		//to avoid dirty input
-		gMaxVertNum &= 65535;
-		gMaxIndexNum &= (65536 * 4 - 1);
-		//****************************************************
-
-		gMaxFaceNum = gMaxIndexNum / 3;
-	}
-
 
 	uint16_t* OccluderBakeBuffer::GetIndicesBySize(uint32_t size)
 	{
-		if (mIndices.size() < size)
-		{
-			uint32_t requestSize = std::max<int>(size, gMaxIndexNum);
-			mIndices.resize(requestSize);
-		}
-		return &mIndices[0];
+		if (size == 0) return nullptr;
+		mIndices = new uint16_t[size];
+		return mIndices;
 	}
 
 	__m128* OccluderBakeBuffer::GetPointsBySize(uint32_t size)
 	{
-		if (mPoints.size() < size) {
-			uint32_t requestSize = std::max<int>(size, gMaxVertNum);
-			mPoints.resize(requestSize);
-		}
-		return &mPoints[0];
+		if (size == 0) return nullptr;
+		mPoints = new __m128[size];
+		return mPoints;
 	}
 
-	util::OccluderQuad::MeshFace* OccluderBakeBuffer::GetFaceBySize(uint32_t size)
+	void OccluderBakeBuffer::RequestFaceBySize(uint32_t size)
 	{
-		if (mFaces.size() < size) {
-			uint32_t requestSize = std::max<int>(size, gMaxFaceNum);
-			mFaces.resize(requestSize);
-		}
+		if (size == 0) return;
+		mFaces = new util::MeshFace[size];
+	}
+
+	void OccluderBakeBuffer::RequestQuadBySize(uint32_t size)
+	{
+		if (size == 0) return;
+		mQuads = new util::MeshQuad[size];
+		memset(mQuads, 0, size * sizeof(util::MeshQuad));		
+	}
+
+	void OccluderBakeBuffer::RequestVertexBySize(uint32_t size)
+	{
+		if (size == 0) return;
+		mVertices = new util::MeshVertex[size];
 		for (uint32_t idx = 0; idx < size; idx++)
 		{
-			mFaces[idx].init(idx);
+			mVertices[idx].VertID = idx;
 		}
-		return &mFaces[0];
-	}
-
-	util::OccluderQuad::MeshQuad* OccluderBakeBuffer::GetQuadBySize(uint32_t size)
-	{
-		if (mQuads.size() < size)
-		{
-			uint32_t requestSize = std::max<int>(size, (gMaxFaceNum >> 1) + 1);
-			mQuads.resize(requestSize);
-		}
-		return &mQuads[0];
-	}
-
-	util::OccluderQuad::MeshVertex* OccluderBakeBuffer::GetVertexBySize(uint32_t size)
-	{
-		if (mVertices.size() < size) {
-			uint32_t requestSize = std::max<int>(size, gMaxVertNum);
-			mVertices.resize(requestSize);
-
-			for (uint32_t idx = 0; idx < requestSize; idx++)
-			{
-				mVertices[idx].VertID = idx;
-			}
-		}
-		return &mVertices[0];
 	}
 
 
 	OccluderBakeBuffer::~OccluderBakeBuffer()
 	{
-		gMaxVertNum = 1;
-		gMaxIndexNum = 1;
-		gMaxFaceNum = 1;
-	}
+		if (mParent != nullptr) delete mParent;
+		if (mRequest != nullptr) delete mRequest;
+		if (mReIdx != nullptr) delete[] mReIdx;
+		if (mRemap != nullptr) delete[] mRemap;
+		if (mIndices != nullptr) delete[] mIndices;
+		if (mPoints != nullptr) delete[] mPoints;
+		if (mFaces != nullptr) delete[] mFaces;
+		if (mVertices != nullptr) delete[] mVertices;
+		if (mQuads != nullptr) delete[] mQuads;
+		}
 
 	const uint16_t* OccluderBakeBuffer::ReIndex(const uint16_t* indices, const float* inputVertices, int vertNum, unsigned int nIdx)
 	{
-		reIdx.resize(nIdx);
-		remap.resize(vertNum);
-		remap[0] = 0;
+		mReIdx = new uint16_t[nIdx];
+		mRemap = new uint16_t[vertNum];
+		mRemap[0] = 0;
 		for (int idx = 1; idx < vertNum; idx++)
 		{
-			remap[idx] = idx;
+			mRemap[idx] = idx;
 
 			for (int scan = 0; scan < idx; scan++)
 			{
@@ -564,7 +575,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 					inputVertices[idx3 + 1] == inputVertices[scan3 + 1] &&
 					inputVertices[idx3 + 2] == inputVertices[scan3 + 2])
 				{
-					remap[idx] = scan;
+					mRemap[idx] = scan;
 
 					break;
 				}
@@ -573,9 +584,47 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 
 		for (unsigned int idx = 0; idx < nIdx; idx++)
 		{
-			reIdx[idx] = remap[indices[idx]];
+			mReIdx[idx] = mRemap[indices[idx]];
 		}
-		return reIdx.data();
+		return mReIdx;
+	}
+
+	static float getArea(__m128 p0, __m128 p1, __m128 p2) {
+		__m128 e1 = _mm_sub_ps(p1, p0);
+		__m128 e2 = _mm_sub_ps(p2, p1);
+		__m128 e3 = _mm_sub_ps(p2, p0);
+		__m128 e1e3Cross = cross(e1, e3);
+		__m128 area2 = _mm_dp_ps(e1e3Cross, e1e3Cross, 0x7F);
+		return  sqrt(((float*)&area2)[0]);
+	}
+
+	static __m128 getUnitNormalArea(__m128 p0, __m128 p1, __m128 p2, float& area) {
+		__m128 e1 = _mm_sub_ps(p1, p0);
+		__m128 e2 = _mm_sub_ps(p2, p1);
+		__m128 e3 = _mm_sub_ps(p2, p0);
+		__m128 e1e3Cross = cross(e1, e3);
+		__m128 area2 = _mm_sqrt_ps(_mm_dp_ps(e1e3Cross, e1e3Cross, 0x7F));
+		area = ((float*)&area2)[0];
+		return _mm_div_ps(e1e3Cross, area2);
+	}
+
+
+	static void SplitQuadToTriangle(MeshQuad& mq, QuadTriIndex& qti)
+	{
+		if (mq.QuadKids > 0) {
+			mq.face1->ValidSingleTriangle = true;
+			mq.face2->ValidSingleTriangle = true;
+			mq.face1->nVertIdx[0] = mq.vIdx[0];
+			mq.face1->nVertIdx[1] = mq.vIdx[2];
+			mq.face1->nVertIdx[2] = mq.vIdx[1];
+			mq.face2->nVertIdx[0] = mq.vIdx[0];
+			mq.face2->nVertIdx[1] = mq.vIdx[3];
+			mq.face2->nVertIdx[2] = mq.vIdx[2];
+			mq.QuadKids = 0; //disable quad
+			qti.nQuads -= 4;
+			qti.nTriangles += 6;
+			qti.splitOneQuadToTriangles++;
+		}
 	}
 
 	void OccluderQuad::decomposeToQuad(OccluderBakeBuffer * pBakeBuffer, const uint16_t * indices, unsigned int nIdx, const float* inputVertices, int vertNum, QuadTriIndex & qti, float quadAngle, TerrainInput * terrain, bool checkedTerrain, int terrainGridAxisPoint)
@@ -644,31 +693,40 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 		qti.refMax = refMax;
 		qti.refMin = refMin;
 		qti.nActiveVerts = vertNum;
-		if (nTri > 65535 || nIdx <= 12 || quadAngle == 0 ) //not possible to form a Quad
+		qti.nTriangles = nIdx;
+		//quadAngle = 0;
+		if (nTri > 65535 ) //not possible to form a Quad
 		{
 			qti.indices = nullptr;
 			qti.nQuads = 0;
-			qti.nTriangles = nIdx;
 			return;
 		}
 
 		uint32_t nVert = static_cast<uint32_t>(vertNum);
-		auto Vertices = pBakeBuffer->GetVertexBySize(nVert);
+		pBakeBuffer->RequestVertexBySize(nVert);
+		util::MeshVertex* Vertices = pBakeBuffer->mVertices;
+		
 
-		for (uint32_t i_vert = 0; i_vert < nVert; i_vert++)
-		{
-			Vertices[i_vert].reset();
-		}
-
-		auto Faces = pBakeBuffer->GetFaceBySize(nTri);
+		pBakeBuffer->RequestFaceBySize(nTri);
+		auto Faces = pBakeBuffer->mFaces;
+		std::unordered_map<uint64_t, uint8_t>* keyMap = new std::unordered_map<uint64_t, uint8_t>();
 		for (uint32_t i_tri = 0, i_vert = 0; i_tri < nTri; i_tri++, i_vert += 3)
 		{
 			auto v0 = &Vertices[indices[i_vert]];
 			auto v1 = &Vertices[indices[i_vert + 1]];
 			auto v2 = &Vertices[indices[i_vert + 2]];
-			Faces[i_tri].init(v0, v1, v2);
+			Faces[i_tri].init(i_tri, v0, v1, v2);
+			uint64_t key = Faces[i_tri].uniqueFaceID;
+			if (keyMap->find(key) == keyMap->end()) {
+				keyMap->insert({ key,1 });
+			}
+			else {
+				Faces[i_tri].area = 0;
+			}
 		}
+		delete keyMap;
 
+		int zeroTriangle = 0; //triangles with zero area, duplicated or really zero area
 
 		for (uint32_t i_tri = 0; i_tri < nTri; ++i_tri)
 		{
@@ -688,12 +746,16 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 			__m128 area2 = _mm_sqrt_ps( _mm_dp_ps(e1e3Cross, e1e3Cross, 0x7F));
 			f->UnitNormal = _mm_div_ps(e1e3Cross, area2);
 			//real area is actually: 0.5 * areaT
-			f->area = ((float*)&area2)[0];
+			f->area *= ((float*)&area2)[0];
 
 			float len1 = (dotSum3(e1, e1)); //square length
 			float len2 = (dotSum3(e2, e2));
 			float len3 = (dotSum3(e3, e3));
 
+			if (f->area == 0) { //duplicated or really zero area triangles
+				f->ValidSingleTriangle = false;
+				zeroTriangle++;
+			}
 
 
 			if (len1 >= len2 && len1 >= len3) f->LongestEdgeIdx = 0;
@@ -706,6 +768,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 		for (uint32_t i_tri = 1; i_tri < nTri; ++i_tri)
 		{
 			MeshFace *f = &Faces[i_tri];
+			if (f->ValidSingleTriangle == false) continue;
 
 			{
 				int longestEdgeIdx = f->LongestEdgeIdx;
@@ -714,10 +777,10 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 
 				//purpose: find all the Smaller face that share the reverse of edge fe
 				//ascending order linked list
-				auto neighbors = Vertices[ fe->endVert].EdgeList;
+				auto neighbors = Vertices[fe->endVert].EdgeList;
 				for (auto e = neighbors; e != nullptr; e = e->Next)
 				{
-					if (e->FaceId >= f->FaceID)
+					if (e->FaceIdx >= f->FaceIdx)
 					{
 						//neighbors are face id increasing linked list
 						//we only test each face with the smaller face to avoid duplicate calculation
@@ -728,9 +791,16 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 					}
 					if (e->endVert == fv)
 					{
-						MeshFace * eface = &Faces[e->FaceId];
-						if (eface->PairFace == nullptr)
+						MeshFace * eface = &Faces[e->FaceIdx];
+						if (eface->ValidSingleTriangle)
 						{
+							//first round longest edge to merge
+							MeshEdgeFace* feOpposite = &eface->Edges[eface->LongestEdgeIdx];
+							if (feOpposite->startVert != fe->endVert ||
+								feOpposite->endVert != fe->startVert) {
+								continue;
+							}
+
 							float dotSum = dotSum3(f->UnitNormal, eface->UnitNormal);
 							//allow SDOC Quad drawing
 							if (dotSum >= cosQuadAngle)
@@ -739,6 +809,8 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 
 								eface->PairFace = f;
 								f->PairFace = eface;
+								eface->ValidSingleTriangle = false;
+								f->ValidSingleTriangle = false;
 
 								f->MergedEdgeIdx = fe->edgeIdx;
 								eface->MergedEdgeIdx = e->edgeIdx;
@@ -746,46 +818,132 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 								
 
 								f->IsPlanarQuad = eface->IsPlanarQuad = (dotSum >= PlaneQuadDotThreshold) && bSimplifyMesh;
-							}
+								break;
+							}		
 						}
-						break;
 					}
 				}
 			}
 		}
 
-		if (mergedQuad == 0) //not form a Quad
+		int secondRoundQuad = 0;
+		float cosQuadAngle2 = GetSecondRoundCosQuadAngle(cosQuadAngle);;  //apply more strict condition than largest edge merge
+		float planarQuadTh = GetSecondRoundPlanarTh();  //apply more strict condition than largest edge merge
+		for (uint32_t i_tri = 1; i_tri < nTri; ++i_tri)
+		{
+			MeshFace* f = &Faces[i_tri];
+			if (f->ValidSingleTriangle == false) continue;
+
+			for(int edgeIdx = 0; edgeIdx <=2; edgeIdx++)
+			{
+				MeshEdgeFace* fe = &f->Edges[edgeIdx];
+				auto fv = f->nVertIdx[edgeIdx];
+
+				//purpose: find all the Smaller face that share the reverse of edge fe
+				//ascending order linked list
+				auto neighbors = Vertices[fe->endVert].EdgeList;
+
+				uint16_t startVert = fe->endVert;
+				for (auto e = neighbors; e != nullptr; e = e->Next)
+				{
+					if (e->FaceIdx >= f->FaceIdx)
+					{
+						//neighbors are face id increasing linked list
+						//we only test each face with the smaller face to avoid duplicate calculation
+						//up to this stage, all the face would be larger than faceID, 
+						//so use break, not continue
+
+						break;
+					}
+					if (e->endVert == fv)
+					{
+						MeshFace* eface = &Faces[e->FaceIdx];
+						if (eface->ValidSingleTriangle)
+						{
+							float dotSum = dotSum3(f->UnitNormal, eface->UnitNormal);
+							//allow SDOC Quad drawing
+							if (dotSum >= cosQuadAngle2)
+							{
+								uint16_t endVert = e->endVert;
+								uint16_t apexVert = e->apexVert;
+								uint16_t apexVert2 = 0;
+								if (f->nVertIdx[0] != startVert && f->nVertIdx[0] != endVert) {
+									apexVert2 = f->nVertIdx[0];
+								}
+								else if (f->nVertIdx[1] != startVert && f->nVertIdx[1] != endVert) {
+									apexVert2 = f->nVertIdx[1];
+								}
+								else {
+									apexVert2 = f->nVertIdx[2];
+								}
+
+								auto startPt = points[startVert];
+								auto endPt = points[endVert];
+								auto apexPt = points[apexVert];
+								auto apexPt2 = points[apexVert2];
+								//check convex property
+								float combineArea = getArea(startPt, apexPt, apexPt2);
+								float combineArea2 = getArea(endPt, apexPt, apexPt2);
+								float AreaSum = eface->area + f->area;
+								if (combineArea2 >= AreaSum || combineArea >= AreaSum) {
+									continue;
+								}
+								mergedQuad++;
+
+								eface->PairFace = f;
+								f->PairFace = eface;
+								eface->ValidSingleTriangle = false;
+								f->ValidSingleTriangle = false;
+
+								f->MergedEdgeIdx = fe->edgeIdx;
+								eface->MergedEdgeIdx = e->edgeIdx;
+
+								secondRoundQuad++;
+
+								f->IsPlanarQuad = eface->IsPlanarQuad = (dotSum >= planarQuadTh) && bSimplifyMesh;
+								edgeIdx = 3;
+								break;
+							}
+						}
+					}
+				}
+			}
+		}
+		if(SaveSimplifyModel && secondRoundQuad > 0)
+			std::cout << "secondRoundQuad   " << secondRoundQuad << "  mergedQuad  " << mergedQuad << " Quad ratio " << (secondRoundQuad * 1.0 / mergedQuad) <<" Triangles " <<(nTri-mergedQuad*2) << std::endl;
+		
+		if (SaveSimplifyModel) {
+			CreateOutputDir();
+			std::string file_path = outputSaveDirectory + "\\" + GetDebugOccluderKey(qti)  + "input.off";
+			storeModel(file_path, inputVertices, nVert, indices, nIdx);
+		}
+
+		if (mergedQuad == 0 && zeroTriangle == 0) //not form a Quad
 		{
 			qti.indices = nullptr;
 			qti.nQuads = 0;
 			qti.nTriangles = nIdx;
 			return;
 		}
-		
-		if (SaveSimplifyModel) {
-			CreateOutputDir();
-			std::string file_path = outputSaveDirectory + "\\" + std::to_string(DebugOccluderIdx++) + "input.off";
-			storeModel(file_path, inputVertices, nVert, indices, nIdx);
-		}
 
 
+		pBakeBuffer->mIsPlanarMesh = false;
 		if ( bSimplifyMesh)
 		{
 			//quick check whether it is actually a simple quad
-			__m128 refMin = qti.refMin;
-			__m128 refMax = qti.refMax;
-
 			__m128 extent = _mm_sub_ps(refMax, refMin);
 			float * aabbf = (float*)&extent;
 			float max = std::max<float>(aabbf[0], aabbf[1]);
 			max = std::max<float>(aabbf[2], max);
-			float planarTh = max * 0.000001f;
+			float planarTh = max * 0.0001f;
 
 			int xFlat = aabbf[0] < planarTh;
 			int yFlat = aabbf[1] < planarTh;
 			int zFlat = aabbf[2] < planarTh;
-			//Optimization: check whether it is a simple quad and output the quad if conditions allow
-			if (xFlat + yFlat + zFlat == 1)
+			//Optimization: 
+			// 1. check whether it is a simple quad and output the quad if conditions allow
+			// 2. check whether it is a simple genus 0 shape could be represented by a center and boundary edges
+			if (xFlat + yFlat + zFlat == 1 && pBakeBuffer->mParent == nullptr)
 			{
 				//check whether point to same direction
 				bool allSameDirection = true;
@@ -794,10 +952,10 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 				{
 					MeshFace *f = &Faces[i_tri];
 					float dotSum = dotSum3(f->UnitNormal, normal);
-					allSameDirection &= dotSum > 0.9f;
+					allSameDirection &= dotSum > 0.9999f;
 				}
 
-				qti.IsPlanar = allSameDirection;
+				pBakeBuffer->mIsPlanarMesh  = allSameDirection;
 				if (allSameDirection)
 				{
 					float area = 0;
@@ -838,51 +996,139 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 						}
 						qti.verts = points;
 
-						qti.nQuads = 0;
-						qti.nTriangles = 6;
+						qti.nQuads = 4;
+						qti.nTriangles = 0;
 						qti.indices = pBakeBuffer->GetIndicesBySize(6);
-						qti.indices[0] = 0;
-						qti.indices[1] = 1;
-						qti.indices[2] = 2;
+						qti.indices[0] = 3;
+						qti.indices[1] = 2;
+						qti.indices[2] = 1;
 						qti.indices[3] = 0;
-						qti.indices[4] = 2;
-						qti.indices[5] = 3;
 						qti.nActiveVerts = 4;
 
 						if (SaveSimplifyModel) {
 							CreateOutputDir();
-							std::string file_path = outputSaveDirectory + "\\" + std::to_string(DebugOccluderIdx++) + "outQuad.off";
+							std::string file_path = outputSaveDirectory + "\\" + GetDebugOccluderKey(qti) + "outQuad.off";
 
                             FILE *fileWriter = fopen(file_path.c_str(), "w");
                             if (fileWriter != nullptr)
 							{
 								fprintf(fileWriter, "OFF\n");
-								fprintf(fileWriter, "%d %d 0\n", 4, 2);
+								fprintf(fileWriter, "%d %d 0\n", 4, 1);
 
 								float * vertf = (float*)qti.verts;
 								for (uint32_t i_vert = 0; i_vert < 4; ++i_vert)
 								{
-									fprintf(fileWriter, "%f %f %f\n",
-										vertf[i_vert * 4],
-										vertf[(i_vert * 4) + 1],
-										vertf[(i_vert * 4) + 2]);
+									savePoint(fileWriter, vertf + i_vert * 4);
 								}
 								//save quads to two triangles
-								fprintf(fileWriter, "3 0 1 2\n");
-								fprintf(fileWriter, "3 0 2 3\n");
+								fprintf(fileWriter, "4 3 2 1 0\n");
 								fclose(fileWriter);
 							}
 						}
 
 						return;
 					}
+
+					//now find edges have degree one and check whether those edge points could form a convex
+					for (uint32_t i_tri = 0; i_tri < nTri; ++i_tri)
+					{
+						MeshFace* f = &Faces[i_tri];
+						for (uint32_t edgeIdx = 0; edgeIdx < 3; edgeIdx++) {
+
+							MeshEdgeFace* fe = &f->Edges[edgeIdx];
+							auto fv = f->nVertIdx[edgeIdx];
+							auto neighbors = Vertices[fe->endVert].EdgeList;
+
+							uint16_t startVert = fe->endVert;
+							for (auto e = neighbors; e != nullptr; e = e->Next)
+							{
+								if (e->endVert == fv) {
+									fe->degree++;
+								}
+							}
+						}
+					}
+
+					__m128 avgPt = _mm_set1_ps(0.0);
+					float areaSumCenter = 0;
+					float areaSumOriginal = 0;
+					uint32_t totalDegreeOne = 0;
+					int totalDegreeTwo = 0;
+					for (uint32_t i_tri = 0; i_tri < nTri; ++i_tri)
+					{
+						MeshFace* f = &Faces[i_tri];
+						for (uint32_t edgeIdx = 0; edgeIdx < 3; edgeIdx++) {
+
+							MeshEdgeFace* fe = &f->Edges[edgeIdx];
+							if (fe->degree == 1) {
+								totalDegreeOne++;
+								avgPt = _mm_add_ps(avgPt, points[fe->startVert]);
+							}
+							else if (fe->degree == 2)
+								totalDegreeTwo++;
+						}
+					}
+					if (totalDegreeOne > 0 && (totalDegreeOne + totalDegreeTwo) == nTri * 3) {
+						avgPt = _mm_div_ps(avgPt, _mm_set1_ps((float)totalDegreeOne));
+						bool sameDir = true;
+						if (totalDegreeOne * 2 < nTri) {
+							//now check the point fall on the same side of edge
+							for (uint32_t i_tri = 0; i_tri < nTri; ++i_tri)
+							{
+								MeshFace* f = &Faces[i_tri];
+								areaSumOriginal += f->area;
+								for (uint32_t edgeIdx = 0; edgeIdx < 3; edgeIdx++) {
+
+									MeshEdgeFace* fe = &f->Edges[edgeIdx];
+									if (fe->degree == 1) {
+										float faceArea = 0;
+										__m128 unitNormal = getUnitNormalArea(points[fe->startVert], points[fe->endVert], avgPt, faceArea);
+										areaSumCenter += faceArea;
+										float dotSum = dotSum3(f->UnitNormal, unitNormal);
+										sameDir &= dotSum > 0.99;
+									}
+								}
+							}
+
+							if (sameDir && abs(areaSumOriginal / areaSumCenter - 1.0) < 0.001) {
+								float* pts = new float[3 *(vertNum + 1)];
+								memcpy(pts, inputVertices, vertNum * 3 * sizeof(float));
+								float *extraPt = (float*)&avgPt;
+								memcpy(pts+vertNum * 3, extraPt, 3 * sizeof(float));
+								uint16_t* indices2 = new uint16_t[totalDegreeOne * 3];
+								int indicesIdx = 0;
+								for (uint32_t i_tri = 0; i_tri < nTri; ++i_tri)
+								{
+									MeshFace* f = &Faces[i_tri];
+									for (uint32_t edgeIdx = 0; edgeIdx < 3; edgeIdx++) {
+
+										MeshEdgeFace* fe = &f->Edges[edgeIdx];
+										if (fe->degree == 1) {
+											indices2[indicesIdx++] = fe->startVert;
+											indices2[indicesIdx++] = fe->endVert;											
+											indices2[indicesIdx++] = vertNum;  //debug: change fe->apexVert for degree 2 triangles
+										}
+									}
+								}
+								pBakeBuffer->CreateNewBakeRequest(pts, vertNum + 1, indices2, totalDegreeOne * 3);
+
+								if (SaveSimplifyModel) {
+									CreateOutputDir();
+									std::string file_path = outputSaveDirectory + "\\" + GetDebugOccluderKey(qti) + "inputEXTRA.off";
+									storeModel(file_path, pts, vertNum + 1, indices2, totalDegreeOne * 3);
+								}
+								return ;
+							}
+						}
+
+					}
 				}
 			}
 		}
 
 		int totalRequestQuads = mergedQuad;
-		auto Quads = pBakeBuffer->GetQuadBySize(totalRequestQuads);
-		memset(Quads, 0, totalRequestQuads * sizeof(MeshQuad)); //reset all to default 0 or null
+		pBakeBuffer->RequestQuadBySize(totalRequestQuads);
+		auto Quads = pBakeBuffer->mQuads;
 		uint32_t quadIdx = 0;
 
 		int totalRectangleQuad = 0;
@@ -892,13 +1138,14 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 			MeshFace *face1 = &Faces[i_tri];
 			MeshFace *face2 = face1->PairFace;
 
-			if (face2 != nullptr && i_tri < face2->FaceID)
+			if (face2 != nullptr && i_tri < face2->FaceIdx)
 			{
 				//retrieve the quad info
 				auto q = &Quads[quadIdx];
 				q->qIdx = quadIdx;
 				q->face1 = face1;
 				q->face2 = face2;
+				q->quad_area = face2->area + face1->area;
 
 				MeshEdgeFace &EdgeFace1 = face1->Edges[face1->MergedEdgeIdx];
 				MeshEdgeFace &EdgeFace2 = face2->Edges[q->face2->MergedEdgeIdx];
@@ -915,30 +1162,31 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 
 				
 				q->QuadKids = 1;
+				q->IsPlanarQuad = face1->IsPlanarQuad;
 
 				quadIdx++;
 
 			}
 		}
 
-		bool toSimplifyMesh = bSimplifyMesh;
-		if (qti.IsPlanar == false) {
-			toSimplifyMesh &= totalRectangleQuad > 1;
-		}
+		bool toSimplifyMesh = quadIdx > 1;
 		
 
-		qti.nTriangles = 3 * (nTri - mergedQuad * 2);
+		qti.nTriangles = 3 * (nTri - mergedQuad * 2 - zeroTriangle);
 		uint32_t quadNum = quadIdx;
 
 		
 
 		int quadFourMergeCount = 0;
 		int quadTwoMergeCount = 0;
+
+		float lineLinkTH = ProjectLineMidAngleTh;
 		if (toSimplifyMesh)
 		{
 			int neighborMergeCount = 0;
 			bool quadMerge = 1;
 			if (quadMerge) {
+				bool allowDiffKidMerge = false;
 				int targetQuadIdx = 1;
 				int mergeRound = QuadFourMergeRound + isTerrain;
 				
@@ -987,7 +1235,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 								MeshQuad * q0 = &Quads[p0];
 								MeshQuad * q1 = &Quads[p1];
 
-								if (MergeQuad(q0, q1, points, Vertices, isTerrain, quadFourMergeCount)) continue;
+								if (MergeQuad(q0, q1, points, Vertices, isTerrain, quadFourMergeCount, lineLinkTH, allowDiffKidMerge)) continue;
 
 							}
 							else if (v->RectangleDegree == 3) {
@@ -1000,9 +1248,9 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 								MeshQuad * q2 = &Quads[p2];
 
 
-								if (MergeQuad(q0, q1, points, Vertices, isTerrain, quadFourMergeCount)) continue;
-								if (MergeQuad(q0, q2, points, Vertices, isTerrain, quadFourMergeCount)) continue;
-								if (MergeQuad(q1, q2, points, Vertices, isTerrain, quadFourMergeCount)) continue;
+								if (MergeQuad(q0, q1, points, Vertices, isTerrain, quadFourMergeCount, lineLinkTH, allowDiffKidMerge)) continue;
+								if (MergeQuad(q0, q2, points, Vertices, isTerrain, quadFourMergeCount, lineLinkTH, allowDiffKidMerge)) continue;
+								if (MergeQuad(q1, q2, points, Vertices, isTerrain, quadFourMergeCount, lineLinkTH, allowDiffKidMerge)) continue;
 
 							}
 						}
@@ -1037,25 +1285,25 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 								float t2 = dotSum3(q0->face1->UnitNormal, q2->face1->UnitNormal);
 								float t3 = dotSum3(q0->face1->UnitNormal, q3->face1->UnitNormal);
 								if (t1 >= QuadFourSameFaceTh && t2 >= QuadFourSameFaceTh && t3 >= QuadFourSameFaceTh) {
-									if (q0->MergeWith(q1, points, Vertices, isTerrain, quadFourMergeCount))
+									if (q0->MergeWith(q1, QuadTwoSameFaceTh, points, Vertices, isTerrain, quadFourMergeCount, lineLinkTH))
 									{
-										if (q2->MergeWith(q3, points, Vertices, isTerrain, quadFourMergeCount))
-											q0->MergeWith(q2, points, Vertices, isTerrain, quadFourMergeCount);
+										if (q2->MergeWith(q3, QuadTwoSameFaceTh, points, Vertices, isTerrain, quadFourMergeCount, lineLinkTH))
+											q0->MergeWith(q2, QuadTwoSameFaceTh, points, Vertices, isTerrain, quadFourMergeCount, lineLinkTH);
 									}
-									else if (q0->MergeWith(q2, points, Vertices, isTerrain, quadFourMergeCount))
+									else if (q0->MergeWith(q2, QuadTwoSameFaceTh, points, Vertices, isTerrain, quadFourMergeCount, lineLinkTH))
 									{
-										if (q1->MergeWith(q3, points, Vertices, isTerrain, quadFourMergeCount))
-											q0->MergeWith(q1, points, Vertices, isTerrain, quadFourMergeCount);
+										if (q1->MergeWith(q3, QuadTwoSameFaceTh, points, Vertices, isTerrain, quadFourMergeCount, lineLinkTH))
+											q0->MergeWith(q1, QuadTwoSameFaceTh, points, Vertices, isTerrain, quadFourMergeCount, lineLinkTH);
 									}
-									else if (q0->MergeWith(q3, points, Vertices, isTerrain, quadFourMergeCount))
+									else if (q0->MergeWith(q3, QuadTwoSameFaceTh, points, Vertices, isTerrain, quadFourMergeCount, lineLinkTH))
 									{
-										if (q1->MergeWith(q2, points, Vertices, isTerrain, quadFourMergeCount))
-											q0->MergeWith(q1, points, Vertices, isTerrain, quadFourMergeCount);
+										if (q1->MergeWith(q2, QuadTwoSameFaceTh, points, Vertices, isTerrain, quadFourMergeCount, lineLinkTH))
+											q0->MergeWith(q1, QuadTwoSameFaceTh, points, Vertices, isTerrain, quadFourMergeCount, lineLinkTH);
 									}
-									else if (q2->MergeWith(q3, points, Vertices, isTerrain, quadFourMergeCount)) {
+									else if (q2->MergeWith(q3, QuadTwoSameFaceTh, points, Vertices, isTerrain, quadFourMergeCount, lineLinkTH)) {
 
 									}
-									else if (q2->MergeWith(q1, points, Vertices, isTerrain, quadFourMergeCount)) {
+									else if (q2->MergeWith(q1, QuadTwoSameFaceTh, points, Vertices, isTerrain, quadFourMergeCount, lineLinkTH)) {
 
 									}
 								}
@@ -1133,7 +1381,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 										//such as edge-joining to proper remove of T-junction
 										if (gTerrainGridOptimization == TerrainOpMode::AggressiveMerging) 
 										{											
-											q0->MergeWith(q1, points, Vertices, isTerrain, degree2Merge);
+											q0->MergeWith(q1, QuadTwoSameFaceTh, points, Vertices, isTerrain, degree2Merge, lineLinkTH);
 										}
 										else 
 										{
@@ -1147,7 +1395,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 														MeshVertex* pairV = &Vertices[pair];
 														if (pairV->RectangleDegree == 2)
 														{
-															q0->MergeWith(q1, points, Vertices, isTerrain, degree2Merge);
+															q0->MergeWith(q1, QuadTwoSameFaceTh, points, Vertices, isTerrain, degree2Merge, lineLinkTH);
 														}
 														i = j = 4;
 													}
@@ -1163,13 +1411,15 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 				}
 			}
 
+			int mergeRound = 0;
 			bool neighborMerge = 1;
 			//terrain already handled in quad merge
 			if (neighborMerge && isTerrain == false && toSimplifyMesh)
 			{				
 
 				int terminateTh = 5;
-				bool planarFreeShapeMerge = false;
+				bool freeShapePlanarMerge = false;
+				bool allowDiffKidMerge = false;
 				do
 				{
 					neighborMergeCount = 0;
@@ -1177,7 +1427,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 
 					
 
-					if (planarFreeShapeMerge == false) {
+					if (freeShapePlanarMerge == false) {
 						for (uint32_t i_quad = 0; i_quad < quadNum; ++i_quad)
 						{
 							//retrieve the quad info
@@ -1215,8 +1465,10 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 							}
 						}
 					}
-	
-					if (planarFreeShapeMerge) {
+					if (freeShapePlanarMerge) {
+						QuadTwoSameFaceTh = GetSecondRoundQuadTwoFaceFreeMerge(QuadTwoSameFaceTh); 
+						
+						lineLinkTH = GetSecondRoundQuadMergeLineLinkMerge(lineLinkTH);
 						ProjectLineMidAngleTh = PlaneQuadDotThreshold; //apply strict constraint
 						for (uint32_t idx = 0; idx < nVert; idx++)
 						{
@@ -1232,18 +1484,14 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 								MeshQuad * q2 = &Quads[p2];
 								MeshQuad * q3 = &Quads[p3];
 								
-								if (q0->MergeWith(q1, points, Vertices, false, neighborMergeCount)) 
-								{
-									q2->MergeWith(q3, points, Vertices, false, neighborMergeCount);
-								}
-								else if (q0->MergeWith(q2, points, Vertices, false, neighborMergeCount)) 
-								{
-									q1->MergeWith(q3, points, Vertices, false, neighborMergeCount);
-								}
-								else if (q0->MergeWith(q3, points, Vertices, false, neighborMergeCount)) 
-								{
-									q1->MergeWith(q3, points, Vertices, false, neighborMergeCount);
-								}
+								
+
+								pBakeBuffer->QuickMerge(q0, q1, QuadTwoSameFaceTh, points, Vertices, neighborMergeCount, lineLinkTH, allowDiffKidMerge);
+								pBakeBuffer->QuickMerge(q0, q2, QuadTwoSameFaceTh, points, Vertices, neighborMergeCount, lineLinkTH, allowDiffKidMerge);
+								pBakeBuffer->QuickMerge(q0, q3, QuadTwoSameFaceTh, points, Vertices, neighborMergeCount, lineLinkTH, allowDiffKidMerge);
+								pBakeBuffer->QuickMerge(q1, q2, QuadTwoSameFaceTh, points, Vertices, neighborMergeCount, lineLinkTH, allowDiffKidMerge);
+								pBakeBuffer->QuickMerge(q1, q3, QuadTwoSameFaceTh, points, Vertices, neighborMergeCount, lineLinkTH, allowDiffKidMerge);
+								pBakeBuffer->QuickMerge(q2, q3, QuadTwoSameFaceTh, points, Vertices, neighborMergeCount, lineLinkTH, allowDiffKidMerge);
 							}
 						}
 
@@ -1258,7 +1506,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 								MeshQuad * q0 = &Quads[p0];
 								MeshQuad * q1 = &Quads[p1];
 
-								q0->MergeWith(q1, points, Vertices, false, neighborMergeCount);
+								q0->MergeWith(q1, QuadTwoSameFaceTh, points, Vertices, false, neighborMergeCount, lineLinkTH);
 							}
 							else if (v->RectangleDegree == 3) {
 								uint16_t p0 = v->quad[0];
@@ -1269,14 +1517,11 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 								MeshQuad * q1 = &Quads[p1];
 								MeshQuad * q2 = &Quads[p2];
 
-								if (q0->MergeWith(q1, points, Vertices, false, neighborMergeCount)) {
-
+								if (q0->MergeWith(q1, QuadTwoSameFaceTh, points, Vertices, false, neighborMergeCount, lineLinkTH)) {
 								}
-								else if (q1->MergeWith(q2, points, Vertices, false, neighborMergeCount)) {
-
+								else if (q1->MergeWith(q2, QuadTwoSameFaceTh, points, Vertices, false, neighborMergeCount, lineLinkTH)) {
 								}
-								else if (q0->MergeWith(q2, points, Vertices, false, neighborMergeCount)) {
-
+								else if (q0->MergeWith(q2, QuadTwoSameFaceTh, points, Vertices, false, neighborMergeCount, lineLinkTH)) {
 								}
 							}
 						}
@@ -1298,7 +1543,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 								{
 									continue;
 								}
-								if (qti.IsPlanar == false) {
+								
 									float largestArea = std::max<float>(q0->face1->area,
 										q1->face1->area);
 									float areaTh = largestArea * 0.7f;  //allow area ratio around  0.7
@@ -1308,17 +1553,8 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 										q0->face1->area > areaTh &&
 										q1->face1->area > areaTh)
 									{
-										float t1 = dotSum3(q0->face1->UnitNormal, q1->face1->UnitNormal);
-										float th = QuadTwoSameFaceTh;
-										if (t1 >= th)
-										{
-											q0->MergeWith(q1, points, Vertices, isTerrain, neighborMergeCount);
-										}
+										q0->MergeWith(q1, QuadTwoSameFaceTh, points, Vertices, isTerrain, neighborMergeCount, lineLinkTH);
 									}
-								}
-								else {
-									q0->MergeWith(q1, points, Vertices, isTerrain, neighborMergeCount);
-								}
 							}
 							else if (v->RectangleDegree == 4) {
 								uint16_t p0 = v->quad[0];
@@ -1331,48 +1567,55 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 								MeshQuad * q3 = &Quads[p3];
 
 
-								float t01 = dotSum3(q0->face1->UnitNormal, q1->face1->UnitNormal);
+								pBakeBuffer->QuickMerge(q0, q1, QuadTwoSameFaceTh, points, Vertices, neighborMergeCount, lineLinkTH, allowDiffKidMerge);
+								pBakeBuffer->QuickMerge(q0, q2, QuadTwoSameFaceTh, points, Vertices, neighborMergeCount, lineLinkTH, allowDiffKidMerge);
+								pBakeBuffer->QuickMerge(q0, q3, QuadTwoSameFaceTh, points, Vertices, neighborMergeCount, lineLinkTH, allowDiffKidMerge);
+								pBakeBuffer->QuickMerge(q1, q2, QuadTwoSameFaceTh, points, Vertices, neighborMergeCount, lineLinkTH, allowDiffKidMerge);
+								pBakeBuffer->QuickMerge(q1, q3, QuadTwoSameFaceTh, points, Vertices, neighborMergeCount, lineLinkTH, allowDiffKidMerge);
+								pBakeBuffer->QuickMerge(q2, q3, QuadTwoSameFaceTh, points, Vertices, neighborMergeCount, lineLinkTH, allowDiffKidMerge);
+							}
+							else if(false){
+								int from = neighborMergeCount;
+								uint16_t p0 = v->quad[0];
+								uint16_t p1 = v->quad[1];
+								uint16_t p2 = v->quad[2];
+								uint16_t p3 = v->quad[3];
+								MeshQuad* q0 = nullptr;
+								MeshQuad* q1 = nullptr;
+								MeshQuad* q2 = nullptr;
+								MeshQuad* q3 = nullptr;
+								if (p0 < totalRequestQuads) q0 = &Quads[p0];
+								if (p1 < totalRequestQuads) q1 = &Quads[p1];
+								if (p2 < totalRequestQuads) q2 = &Quads[p2];
+								if (p3 < totalRequestQuads) q3 = &Quads[p3];
 
-								if (t01 > QuadTwoSameFaceTh && q0->QuadKids == q1->QuadKids && q0->MergeWith(q1, points, Vertices, false, neighborMergeCount))
-								{
-									float t23 = dotSum3(q2->face1->UnitNormal, q3->face1->UnitNormal);
-									if (t23 > QuadTwoSameFaceTh && q2->QuadKids == q3->QuadKids) {
-										q2->MergeWith(q3, points, Vertices, false, neighborMergeCount);
-									}
-								}
-								else {
-									float t02 = dotSum3(q0->face1->UnitNormal, q2->face1->UnitNormal);
-									if (t02 > QuadTwoSameFaceTh  && q0->QuadKids == q2->QuadKids && q0->MergeWith(q2, points, Vertices, false, neighborMergeCount))
-									{
-										float t13 = dotSum3(q1->face1->UnitNormal, q3->face1->UnitNormal);
-										if (t13 > QuadTwoSameFaceTh && q1->QuadKids == q3->QuadKids) {
-											q1->MergeWith(q3, points, Vertices, false, neighborMergeCount);
-										}
-									}
-									else {
 
-										float t03 = dotSum3(q0->face1->UnitNormal, q3->face1->UnitNormal);
-										if (t03 > QuadTwoSameFaceTh  && q0->QuadKids == q3->QuadKids && q0->MergeWith(q3, points, Vertices, false, neighborMergeCount))
-										{
-											float t12 = dotSum3(q1->face1->UnitNormal, q2->face1->UnitNormal);
-											if (t12 > QuadTwoSameFaceTh && q1->QuadKids == q2->QuadKids) {
-												q1->MergeWith(q2, points, Vertices, false, neighborMergeCount);
-											}
-										}
-									}
-								}
+								pBakeBuffer->QuickMerge(q0, q1, QuadTwoSameFaceTh, points, Vertices, neighborMergeCount, lineLinkTH, allowDiffKidMerge);
+								pBakeBuffer->QuickMerge(q0, q2, QuadTwoSameFaceTh, points, Vertices, neighborMergeCount, lineLinkTH, allowDiffKidMerge);
+								pBakeBuffer->QuickMerge(q0, q3, QuadTwoSameFaceTh, points, Vertices, neighborMergeCount, lineLinkTH, allowDiffKidMerge);
+								pBakeBuffer->QuickMerge(q1, q2, QuadTwoSameFaceTh, points, Vertices, neighborMergeCount, lineLinkTH, allowDiffKidMerge);
+								pBakeBuffer->QuickMerge(q1, q3, QuadTwoSameFaceTh, points, Vertices, neighborMergeCount, lineLinkTH, allowDiffKidMerge);
+								pBakeBuffer->QuickMerge(q2, q3, QuadTwoSameFaceTh, points, Vertices, neighborMergeCount, lineLinkTH, allowDiffKidMerge);
+								
 							}
 						}
 					}
 
 					quadTwoMergeCount += neighborMergeCount;
 					//for planar quad, allow free shape merge
-					if (neighborMergeCount < terminateTh && planarFreeShapeMerge == false && qti.IsPlanar)
+					if (freeShapePlanarMerge == false && (AllowFreeMergeForMesh))
 					{
-						neighborMergeCount += terminateTh+1;
-						planarFreeShapeMerge = true;
+						freeShapePlanarMerge = true;
 					}
-				} while (neighborMergeCount > terminateTh);
+					if (SaveSimplifyModel) {
+						std::cout << "MergeRound " << mergeRound << " TwoMergeCount " << neighborMergeCount << "   allowDiffKidMerge " << allowDiffKidMerge << " DebugOccluderID " << DebugOccluderID << std::endl;
+					}
+					mergeRound++;
+					if (neighborMergeCount == 0 && mergeRound > 1 && mergeRound < 4) {
+						mergeRound = 4;
+					}
+					allowDiffKidMerge = mergeRound == 4;
+				} while (mergeRound < 5);
 			}
 			int validQuad = 0;
 			for (uint32_t i_quad = 0; i_quad < quadNum; ++i_quad)
@@ -1567,9 +1810,109 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 		}
 
 
+		//******************************************************
+		//now try to merge triangle with neighboring quad
+		if (qti.nTriangles > 0) {
+			for (int loopIdx = 0; loopIdx < totalRequestQuads; ++loopIdx)
+			{
+				MeshQuad* mq = &Quads[loopIdx];
+				if (mq->QuadKids > 0)
+				{
+					for (int qidx = 0; qidx < 4; qidx++) {
+						uint16_t vIdx = mq->vIdx[qidx];
+						util::MeshVertex& vert = Vertices[vIdx];
+						vert.QuadIndices <<= 16;
+						vert.QuadIndices |= loopIdx + 1; //store max four Quad Idx (+1) for vert
+					}
+				}
+			}
+			int mergedTriangle = 0;
+			for (uint32_t i_tri = 0; i_tri < nTri; ++i_tri)
+			{
+				MeshFace* face = &Faces[i_tri];
+				// No quad found
+				if (face->ValidSingleTriangle)
+				{
+					for (int vidx = 0; vidx < 3; vidx++) {
+						util::MeshVertex& vert = Vertices[face->nVertIdx[vidx]];
+						uint64_t quadInfo = vert.QuadIndices;
+						while (quadInfo > 0) {
+							uint16_t vertexQuadIdx = (quadInfo & 65535);
+							quadInfo >>= 16;
+							if (vertexQuadIdx > 0) {
+								MeshQuad* mq = &Quads[vertexQuadIdx - 1];
+								if (MergeTriangleIntoQuad(face, mq, vert, points, Vertices)) {
+									mergedTriangle++;
+									vidx = 3;
+									quadInfo = 0;
+								}
+							}
+						}
+					}
+				}
+			}
+			if (mergedTriangle > 0 && SaveSimplifyModel) 
+				std::cout << "*****************************************************EXTRA MERGE " << mergedTriangle << std::endl;
+			qti.nTriangles -= mergedTriangle * 3;
+		}
+		
+		//******************************************************
 
+		if ((qti.nQuads & 15) == 4 && (qti.nTriangles % 12) <= 6 && (qti.nTriangles % 12) > 0) {
+			//split the quad with minimal area
+			float min_area = 3.402823E+38;
+			int min_quad_idx = -1;
+			for (int i_tri = totalRequestQuads - 1; i_tri >= 0; --i_tri)
+			{
+				MeshQuad* mq = &Quads[i_tri];
+				if (mq->QuadKids > 0)
+				{
+					if (mq->quad_area < min_area) {
+						min_area = mq->quad_area;
+						min_quad_idx = i_tri;
+					}
+				}
+			}
+			if (min_quad_idx >= 0) {
+				SplitQuadToTriangle(Quads[min_quad_idx], qti);
+			}
+		}
+		else {
+			__m128 extend = _mm_sub_ps(qti.refMax, qti.refMin);
+			float* d = (float*)&extend;
+			if (d[0] * d[1] * d[2] == 0 && qti.nQuads == 8
+				&& qti.nTriangles == 0 
+				&& nVert == 8 && nIdx == 36){ //AABB only two quad face left, split to 4 triangles
+				for (int i_tri = 0; i_tri < totalRequestQuads; ++i_tri)
+				{
+					SplitQuadToTriangle(Quads[i_tri], qti);
+				}
+			}
+		}
 
-
+		if (qti.nTriangles == 0 && qti.nQuads <= 48 && (nVert%8==0))
+		{
+			float flatArea = 0;
+			float neighborArea = 0;
+			__m128 vertical = _mm_setr_ps(0, 0, 1, 0);
+			for (int i_tri = 0; i_tri < totalRequestQuads; ++i_tri)
+			{
+				MeshQuad* mq = &Quads[i_tri];
+				if (mq->QuadKids > 0)
+				{
+					float dotSum = dotSum3(mq->face1->UnitNormal, vertical);
+					if (abs(dotSum) > 0.95f) {
+						flatArea += mq->quad_area;
+					}
+					else {
+						neighborArea += mq->quad_area;
+					}
+				}
+			}
+			if (neighborArea < flatArea * 0.001f) {
+				qti.Superflat = 1;
+			}
+		}
 
 		qti.indices = pBakeBuffer->GetIndicesBySize(qti.nQuads + qti.nTriangles);
 		uint16_t *pIndices = qti.indices;
@@ -1591,38 +1934,34 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 			MeshFace *face1 = &Faces[i_tri];
 
 			// No quad found
-			if (face1->PairFace == nullptr)
+			if (face1->ValidSingleTriangle)
 			{
-				memcpy(pIndices, indices + (3 * i_tri), 3 * sizeof(uint16_t));
+				memcpy(pIndices, face1->nVertIdx, 3 * sizeof(uint16_t));
 				pIndices += 3;// mq->PolygonPoint;
 			}
 		}
 
 
 		uint32_t totalUseIdx = qti.nQuads + qti.nTriangles;
-		//RectangleDegree used for merged vertex id
-		for (uint32_t i = 0; i < nVert; i++) {
-			Vertices[i].RectangleDegree = -1;
-		}
 		//Remove the not used vertices for strip triangle off file
 		for (uint32_t i = 0; i < totalUseIdx; i++)
 		{
-			Vertices[qti.indices[i]].RectangleDegree = 0;
+			Vertices[qti.indices[i]].NewVertexID = 0;
 		}
 
 		uint32_t nextVertID = 0;
 		for (uint32_t i = 0; i < nVert; i++) {
 			MeshVertex* v = &Vertices[i];
-			if (v->RectangleDegree == 0)
+			if (v->NewVertexID == 0)
 			{
-				v->RectangleDegree = nextVertID;
+				v->NewVertexID = nextVertID;
 				qti.verts[nextVertID] = qti.verts[i];
 				nextVertID++;
 			}
 		}
 		for (uint32_t i = 0; i < totalUseIdx; i++)
 		{
-			qti.indices[i] = Vertices[qti.indices[i]].RectangleDegree;
+			qti.indices[i] = Vertices[qti.indices[i]].NewVertexID;
 		}
 		qti.nActiveVerts = nextVertID;
 
@@ -1631,54 +1970,49 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 		
 		{
 			if(SaveSimplifyModel)
-			{
-				inputVertices = (float*)qti.verts; //apply water tight fix to avoid any small holes
-				
+			{				
 				std::string file_path;
 				if (qti.nQuads > 0) {
 					CreateOutputDir();
 					if (isTerrain) {
-						file_path = outputSaveDirectory + "\\" + std::to_string(DebugOccluderIdx++) + "TerrainQuad.off";
+						file_path = outputSaveDirectory + "\\" + GetDebugOccluderKey(qti) + "TerrainQuad.off";
 					}
 					else {
-						file_path = outputSaveDirectory + "\\" + std::to_string(DebugOccluderIdx++) + "QuadOut.off";
+						file_path = outputSaveDirectory + "\\" + GetDebugOccluderKey(qti) + "QuadOut.off";
 					}
 
-					FILE *fileWriter = fopen(file_path.c_str(), "w");
-					if (fileWriter != nullptr)
-					{
-						uint32_t nFace = (qti.nQuads >> 2) + qti.nTriangles / 3;
+					int saveQuad = 1; //
+					uint32_t nFace = (qti.nQuads >> 2) * saveQuad + qti.nTriangles / 3;
+					if (nFace > 0) {
 
-
-						fprintf(fileWriter, "OFF\n");
-						fprintf(fileWriter, "%d %d 0\n", qti.nActiveVerts, nFace);
-
-						for (uint32_t i_vert = 0; i_vert < qti.nActiveVerts; ++i_vert)
+						FILE* fileWriter = fopen(file_path.c_str(), "w");
+						if (fileWriter != nullptr)
 						{
-							fprintf(fileWriter, "%f %f %f\n",
-								inputVertices[i_vert * 4],
-								inputVertices[(i_vert * 4) + 1],
-								inputVertices[(i_vert * 4) + 2]);
-						}
-						for (uint32_t i = 0; i < qti.nQuads; i += 4)
-						{
-							fprintf(fileWriter, "4 %d %d %d %d\n",
-								qti.indices[i],
-								qti.indices[i + 1],
-								qti.indices[i + 2],
-								qti.indices[i + 3]);
-						}
-						for (uint32_t i = qti.nQuads; i < totalUseIdx; i += 3)
-						{
-							fprintf(fileWriter, "3 %d %d %d\n",
-								qti.indices[i],
-								qti.indices[i + 1],
-								qti.indices[i + 2]);
-						}
+							fprintf(fileWriter, "OFF\n");
+							fprintf(fileWriter, "%d %d 0\n", qti.nActiveVerts, nFace);
+							float* vertf = (float*)qti.verts;
+							for (uint32_t i_vert = 0; i_vert < qti.nActiveVerts; ++i_vert)
+							{
+								savePoint(fileWriter, vertf + i_vert * 4);
+							}
+							if (saveQuad) {
+								for (uint32_t i = 0; i < qti.nQuads; i += 4)
+								{
+									fprintf(fileWriter, "4 %d %d %d %d\n",
+										qti.indices[i],
+										qti.indices[i + 1],
+										qti.indices[i + 2],
+										qti.indices[i + 3]);
+								}
+							}
+							for (uint32_t i = qti.nQuads; i < totalUseIdx; i += 3)
+							{
+								saveTriangle(fileWriter, qti.indices + i);
+							}
 
-						fclose(fileWriter);
+							fclose(fileWriter);
+						}
 					}
-
 				}
 				
 				
@@ -1687,7 +2021,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 				//push triangle mesh to SOC
 				//save as triangle off file
 				CreateOutputDir();
-				file_path = outputSaveDirectory + "\\" + std::to_string(DebugOccluderIdx++) + "out.off";
+				file_path = outputSaveDirectory + "\\" + GetDebugOccluderKey(qti) + "out.off";
 				FILE * fileWriter = fopen(file_path.c_str(), "w");
                 if (fileWriter != nullptr)
 				{
@@ -1697,47 +2031,37 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 					fprintf(fileWriter, "OFF\n");
 					fprintf(fileWriter, "%d %d 0\n", latestVertNum, nFace);
 
+
+					float* vertf = (float*)qti.verts;
 					for (uint32_t i_vert = 0; i_vert < qti.nActiveVerts; ++i_vert)
 					{
-						fprintf(fileWriter, "%f %f %f\n",
-							inputVertices[i_vert * 4],
-							inputVertices[(i_vert * 4) + 1],
-							inputVertices[(i_vert * 4) + 2]);
+						savePoint(fileWriter, vertf + i_vert * 4);
 					}
 					for (uint32_t i = 0; i < qti.nQuads; i += 4)
-					{
-						//save quads to two triangles
-						fprintf(fileWriter, "3 %d %d %d\n",
-							qti.indices[i],
-							qti.indices[i + 2],
-							qti.indices[i + 1]);
-
-
-						fprintf(fileWriter, "3 %d %d %d\n",
-							qti.indices[i],
-							qti.indices[i + 3],
-							qti.indices[i + 2]);
-					}
-					for (uint32_t i = qti.nQuads; i < totalUseIdx; i += 3)
 					{
 						fprintf(fileWriter, "3 %d %d %d\n",
 							qti.indices[i],
 							qti.indices[i + 1],
 							qti.indices[i + 2]);
+						fprintf(fileWriter, "3 %d %d %d\n",
+							qti.indices[i],
+							qti.indices[i + 2],
+							qti.indices[i + 3]);
+					}
+					for (uint32_t i = qti.nQuads; i < totalUseIdx; i += 3)
+					{
+						saveTriangle(fileWriter, qti.indices + i);
 					}
 
 					fclose(fileWriter);
 				}
 			}
-
-
-
 		}
 
 	}
 
 
-	bool OccluderQuad::MergeQuad(MeshQuad * q0, MeshQuad * q1, __m128* points, MeshVertex * Vertices, bool isTerrain, int &totalMerged)
+	bool OccluderQuad::MergeQuad(MeshQuad * q0, MeshQuad * q1, __m128* points, util::MeshVertex* Vertices, bool isTerrain, int &totalMerged, float lineLinkTH, bool allowDiffKidMerge)
 	{
 		if (q1->QuadKids == 0 || q0->QuadKids == 0)
 		{
@@ -1747,19 +2071,14 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 		float largestArea = std::max<float>(q0->face1->area,
 			q1->face1->area);
 		float areaTh = largestArea * 0.7f;  //allow area ratio around 0.7
-		if (q1->QuadKids == q0->QuadKids 
+		if ( (q1->QuadKids == q0->QuadKids|| allowDiffKidMerge)
 			&& ((q0->IsRectangle && q1->IsRectangle)) &&
 			q0->face1->area > areaTh &&
 			q1->face1->area > areaTh)
 		{
-			float t1 = dotSum3(q0->face1->UnitNormal, q1->face1->UnitNormal);
-			float th = QuadTwoSameFaceTh; //around 1 degree
-			if (t1 >= th)
+			if (q0->MergeWith(q1, QuadTwoSameFaceTh, points, Vertices, isTerrain, totalMerged, lineLinkTH))
 			{
-				if (q0->MergeWith(q1, points, Vertices, isTerrain, totalMerged))
-				{
-					return true;
-				}
+				return true;
 			}
 		}
 		return false;
@@ -1767,13 +2086,13 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 
 
 
-	static bool ProjectToLine(__m128 a, __m128 b, __m128 mid, __m128 &projMid)
+	static bool ProjectToLine(__m128 a, __m128 b, __m128 mid, __m128 &projMid, float lineTh)
 	{
 		__m128 unitAB = normalize(_mm_sub_ps(a, b));
 		__m128 midB = _mm_sub_ps(mid, b);
 		__m128 unitMB = normalize(midB);
 		float dotSum = dotSum3(unitAB, unitMB);
-		if (dotSum > ProjectLineMidAngleTh) 
+		if (dotSum > lineTh) 
 		{
 			float projLen = dotSum3(midB, unitAB);
 
@@ -1782,23 +2101,31 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 		}
 		return false;
 	}
-	static bool MatchToLine(__m128 a, __m128 b, __m128 mid)
+	static bool MatchToLine(__m128 a, __m128 b, __m128 mid, float lineTh)
 	{
 		__m128 unitAB = normalize(_mm_sub_ps(a, b));
 		__m128 midB = _mm_sub_ps(mid, b);
 		__m128 unitMB = normalize(midB);
 		float dotSum = dotSum3(unitAB, unitMB);
-		if (dotSum > ProjectLineMidAngleTh)
+		if (dotSum > lineTh)
 		{
 			return true;
 		}
 		return false;
 	}
-	bool OccluderQuad::MeshQuad::MergeWith(MeshQuad * q, __m128 * vertices, MeshVertex * MeshVertices, bool isTerrain, int &TotalMerged)
+	bool MeshQuad::MergeWith(MeshQuad * q, float sameFaceTh, __m128 * vertices, util::MeshVertex* MeshVertices, bool isTerrain, int &TotalMerged, float lineTh)
 	{
+		float t1 = dotSum3(this->face1->UnitNormal, q->face1->UnitNormal);
+		float th = QuadTwoSameFaceTh;
+		if (t1 <= sameFaceTh)
+		{
+			return false;
+		}
+
 		if (q->QuadKids == 0 || this->QuadKids == 0) {
 			return false;
 		}
+
 		int SameVertex[8];
 		int find = 0;
 		uint16_t * target = q->vIdx;
@@ -1868,8 +2195,8 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 				if (isTerrain == false)
 				{
 					__m128 updatedPoints[2];
-					if (ProjectToLine(vertices[idx0A], vertices[idx0B], vertices[idx0], updatedPoints[0]) &&
-						ProjectToLine(vertices[idx2A], vertices[idx2B], vertices[idx2], updatedPoints[1]))
+					if (ProjectToLine(vertices[idx0A], vertices[idx0B], vertices[idx0], updatedPoints[0], lineTh) &&
+						ProjectToLine(vertices[idx2A], vertices[idx2B], vertices[idx2], updatedPoints[1], lineTh))
 					{
 						//take the projected new points
 						vertices[idx0] = updatedPoints[0];
@@ -1882,14 +2209,15 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 						MeshVertices[idx2].RectangleDegree -= 2;
 
 						this->QuadKids += q->QuadKids;
+						this->quad_area += q->quad_area;
 						q->QuadKids = 0;
 						TotalMerged++;
 						return true;
 					}
 				}
 				else {
-					if (MatchToLine(vertices[idx0A], vertices[idx0B], vertices[idx0]) &&
-						MatchToLine(vertices[idx2A], vertices[idx2B], vertices[idx2]))
+					if (MatchToLine(vertices[idx0A], vertices[idx0B], vertices[idx0], lineTh) &&
+						MatchToLine(vertices[idx2A], vertices[idx2B], vertices[idx2], lineTh))
 					{
 						this->vIdx[SameVertex[0]] = idx0B;
 						this->vIdx[SameVertex[2]] = idx2B;
@@ -1903,6 +2231,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 
 
 						this->QuadKids += q->QuadKids;
+						this->quad_area += q->quad_area;
 						q->QuadKids = 0;
 						TotalMerged++;
 						return true;
@@ -1915,7 +2244,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 		return false;
 	}
 
-	bool OccluderQuad::RectEdge::MergeInto(RectEdge* refEdge)
+	bool RectEdge::MergeInto(RectEdge* refEdge)
 	{
 		if (this->startGridX == this->endGridX) 
 		{
@@ -1989,7 +2318,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 		gTerrainGridOptimization = value;
 	}
 
-	void OccluderQuad::SetRectangleDegreeToZero(MeshVertex * Vertices, uint32_t nVert)
+	void OccluderQuad::SetRectangleDegreeToZero(util::MeshVertex* Vertices, uint32_t nVert)
 	{
 		uint32_t nVert4 = (nVert >> 2) << 2;
 		//group by 4 to reduce branch check
@@ -2015,7 +2344,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 		if (testTerrain == false) {
 			testTerrain = true;
 			//LoadObj("D:\\Landscape.obj", quadAngle, 63);
-			LoadOff("D:\\40input.off", 15, 0);
+			LoadOff("D:\\14input.off", 15, 0);
 
 
 			return;
@@ -2027,14 +2356,14 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 		if (nVert <= 0 || nIdx < 3 || nIdx % 3 != 0)
 		{
 			std::cout << "Invalid Input model" << std::endl;
-			return nullptr;//invalid input;
+			return false;//invalid input;
 		}
 		//use sse to verify whether the model indices are all smaller than vert number
 		if (nVert < 65536)
 		{
 			__m128i nVert128 = _mm_set1_epi16(nVert);
 			bool all_index_valid = true;
-			int nIdx8 = (nIdx >> 3);
+			uint32_t nIdx8 = (nIdx >> 3);
 			__m128i* pIndices = (__m128i*) indices;
 			__m128i true128 = _mm_set1_epi32(-1);
 			for (uint32_t idx = 0; idx < nIdx8; idx++)
@@ -2059,22 +2388,40 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 	}
 
 
+	void OccluderQuad::Get_BakeData_QuadTriangleNum(uint16_t* value)
+	{
+		value[0] = value[4] * 4;
+		value[1] = value[5] * 4;
+	}
+
+
+	void OccluderQuad::EnableMaxDepthToQueryOccludeeMesh(uint16_t* bakeData)
+	{
+		bakeData[0] |= 1 << 7;  //superflat bit
+	}
 	//due to usage of singleton and global shared result buffer, this function is not thread-safe
 	//developer should add mutex lock at high level to make sdocMeshBake and result retrieving exclusive
 	unsigned short* OccluderQuad::sdocMeshBake(int* outputCompressSize, const float *vertices, const unsigned short *indices, unsigned int nVert, unsigned int nIdx, float quadAngle, bool enableBackfaceCull, bool counterClockWise, int TerrainGridAxisPoint)
 	{
+		//TestModel();
 		if (isInputModelValid(indices, nVert, nIdx) == false) {
 			return nullptr;
 		}
 
-		if (gBakeBuffer == nullptr) {
-			gBakeBuffer = new util::OccluderBakeBuffer();
-		}
+		util::OccluderBakeBuffer* pBakeBuffer = new util::OccluderBakeBuffer();
 		//************************************************************************
 		//decompose to quad
 		//************************************************************************
 		util::QuadTriIndex quadData;
-		util::OccluderQuad::decomposeToQuad(gBakeBuffer, indices, nIdx, vertices, nVert, quadData, quadAngle, nullptr, false, TerrainGridAxisPoint);
+		util::OccluderQuad::decomposeToQuad(pBakeBuffer, indices, nIdx, vertices, nVert, quadData, quadAngle, nullptr, false, TerrainGridAxisPoint);
+		if (pBakeBuffer->mRequest != nullptr) { //one more round of baking
+			util::BakeRequest* request = pBakeBuffer->mRequest;
+			util::OccluderBakeBuffer* pBakeBuffer2 = new util::OccluderBakeBuffer();
+			pBakeBuffer2->mParent = pBakeBuffer;
+			util::OccluderQuad::decomposeToQuad(pBakeBuffer2, request->indices, request->nIdx, request->vertices, request->nVert, quadData, quadAngle, nullptr, false, TerrainGridAxisPoint);
+			pBakeBuffer = pBakeBuffer2;
+		}
+
 		vertices = (float*)quadData.verts;
 
 
@@ -2087,394 +2434,158 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 
 		if (quadBatchNum > 65535 || triangleBatchNum > 65535) {
 			*outputCompressSize = 0;
+			delete pBakeBuffer;
 			return nullptr;
 		}
 
-		////int batchNum = (triangleFaceNum + 3) >> 2;
-		int tillQuadFinish = quadBatchNum * 6 + 2;
-		int compressSize = tillQuadFinish + (triangleBatchNum * 5) - (triangleBatchNum >> 1);
-		if (common::bEnableCompressMode) {
-			compressSize = quadBatchNum * 32 + triangleBatchNum * 24 + quadData.nActiveVerts * 3 + 16 * 2;// +1000;
-		}
-
-		util::OccluderBakeBuffer* pBakeBuffer = gBakeBuffer;
-		int faceBufferSize = (int)pBakeBuffer->mFaces.size() * sizeof(util::OccluderQuad::MeshFace);
-		if (faceBufferSize < compressSize * 4) 
-		{
-			int faceNum = compressSize * 4 / sizeof(util::OccluderQuad::MeshFace) + 1;
-			gBakeBuffer->mFaces.resize(faceNum);
-		}
-		int *outputBuffer = (int*)(&pBakeBuffer->mFaces[0]);
-
-		if (common::bEnableCompressMode == false) {
-			memset(outputBuffer, 0, tillQuadFinish * sizeof(__m128)); //reset all to zero,  Quad request input to be set to 0, triangle no need
-		}
-		//std::cout << " tillQuadFinish " << tillQuadFinish << " compressSize " << compressSize << std::endl;
-
-
-		__m128 scalingXYZW = _mm_setr_ps(65535.0f, 65535.0f, 65535.0f, 0);
-
-		__m128 extents = _mm_sub_ps(quadData.refMax, quadData.refMin);
-
-
-		__m128 invExtents = _mm_div_ps(scalingXYZW, extents);
-		//eliminate zero case
-		__m128 positive = _mm_cmpgt_ps(extents, _mm_setzero_ps());
-		invExtents = _mm_and_ps(invExtents, positive);
-
-		__m128 minusZero = _mm_set1_ps(-0.0f);
-		__m128 minusRefMinInvExtents = _mm_fmadd_ps(_mm_xor_ps(minusZero, invExtents), quadData.refMin, _mm_set1_ps(0.5f));
-
-		__m128i * compressData = (__m128i *) outputBuffer;
-
-
-		float *f = (float*)outputBuffer;
-		f += 2; //first 64 bit used to store model description
-		float *refMinf = (float*)& quadData.refMin;
-		f[0] = refMinf[0];
-		f[1] = refMinf[1];
-		f[2] = refMinf[2];
-		float *extentsf = (float*)& extents;
-		f[3] = extentsf[0];
-		f[4] = extentsf[1];
-		f[5] = extentsf[2];
-		uint16_t* pVint = (uint16_t*)compressData;
-		//pVint += 3;
-		pVint[0] = (int)enableBackfaceCull +( ((int)quadData.IsTerrain) << 5);
-		pVint[1] = 0;// quadData.IsPlanar;
-		pVint[2] = quadBatchNum;
-		pVint[3] = triangleBatchNum;
-
-
-		__m128i *pVertices = compressData + 2; //already store bbox quad patch and tri patch & backface cull
 
 		//if (compressSize * 16 > nVert * 12 + nIdx * 2 && nVert <= 256) 
-		if(common::bEnableCompressMode && quadData.nActiveVerts <= 65535 /3)
+		if(quadData.nActiveVerts <= 65535 /3)
 		{
-			bool idxError = false;
-			pVint[1] = quadData.nActiveVerts;
+			int compressSize = quadBatchNum * 16 + triangleBatchNum * 12 + quadData.nActiveVerts * 3 * 2 + 8 * 4;// +1000;
+		
+	
+	
+			uint16_t* outputBuffer16 = new uint16_t[compressSize];
+
+			int *outputBuffer = (int*)outputBuffer16;
+
+			__m128 extents = _mm_sub_ps(quadData.refMax, quadData.refMin);
+			__m128i * compressData = (__m128i *) outputBuffer;
+
+
+			float *f = (float*)outputBuffer;
+			f += 2; //first 64 bit used to store model description
+			float *refMinf = (float*)& quadData.refMin;
+			f[0] = refMinf[0];
+			f[1] = refMinf[1];
+			f[2] = refMinf[2];
+			float *extentsf = (float*)& extents;
+			f[3] = extentsf[0];
+			f[4] = extentsf[1];
+			f[5] = extentsf[2];
+			uint16_t* pHead = (uint16_t*)compressData;
+
+		
+			pHead[0] = (int)enableBackfaceCull +( ((int)quadData.IsTerrain) << 5) ;
+			pHead[1] = quadData.nActiveVerts;
+			pHead[2] = quadBatchNum;
+			pHead[3] = triangleBatchNum;
+
+			__m128 InvExtents = _mm_div_ps(_mm_setr_ps(1.0f, 1.0f, 1.0f, 0), extents);
+			//check whether any of BoundsRefinedExtents is zero
+			__m128 positive = _mm_cmpgt_ps(extents, _mm_setzero_ps());
+			__m128 invExtents = _mm_and_ps(InvExtents, positive);
+			//temp set of rasterize required input
+			compressData[2] = _mm_castps_si128(invExtents);
+			compressData[3] = _mm_castps_si128(_mm_fmadd_ps(_mm_negate_ps_soc(invExtents), quadData.refMin, _mm_setr_ps(0, 0, 0, 1)));
+			
+			__m128i* pVertices = compressData + 4; //already store bbox quad patch and tri patch & backface cull
+			int piIdx = 0;
 			const uint16_t* pIndexCurrent = quadData.indices;
 			if (pIndexCurrent == nullptr) pIndexCurrent = indices;
 			if (quadData.nActiveVerts <= common::SuperCompressVertNum)
 			{
 				uint8_t * pi8 = (uint8_t*)pVertices;
 
-				int piIdx = 0;
-				for (uint32_t qidx = 0; qidx < quadData.nQuads; qidx++)
-				{
-					pi8[piIdx++] = pIndexCurrent[qidx] * 3;
-					idxError |= pIndexCurrent[qidx] >= quadData.nActiveVerts;
+				int AABBMode = 0;
+				if ((quadData.nQuads == 24 || quadData.nQuads == 48) && quadData.nTriangles == 0) {
+					AABBMode = getAABBMode(quadData, pIndexCurrent);
+					pHead[0] |= AABBMode << 8;
 				}
-				if ((quadData.nQuads & 15) > 0) {
-					int quadFill = 16 - (quadData.nQuads & 15);
-					for (int qidx = 0; qidx < quadFill; qidx++)
+
+				float dx = extentsf[0];
+				float dy = extentsf[1];
+				float dz = extentsf[2];
+				float superFlatRatio = GetSuperFlatOccldueeRatio();
+				if ((dz < std::min(dx, dy) * superFlatRatio) ||
+					(dx < std::min(dy, dz) * superFlatRatio) ||
+					(dy < std::min(dx, dz) * superFlatRatio) )
+				{
+					pHead[0] |= 1 << 7;  //superflat bit
+				}
+				pHead[0] |= quadData.Superflat << 7;
+
+				if (AABBMode != 1) {
+					for (uint32_t qidx = 0; qidx < quadData.nQuads; qidx++)
 					{
-						pi8[piIdx++] = 0;
+						pi8[piIdx++] = pIndexCurrent[qidx] * 3;
+					}
+
+					int quadFill = 16 * quadBatchNum - quadData.nQuads;
+					if (quadFill > 0) {
+						memset(pi8 + piIdx, 0, quadFill * sizeof(uint8_t));
+						piIdx += quadFill;
+					}
+
+					pIndexCurrent += quadData.nQuads;
+					for (uint32_t tidx = 0; tidx < quadData.nTriangles; tidx++)
+					{
+						pi8[piIdx++] = pIndexCurrent[tidx] * 3;
+					}
+					int triFill = 12 * triangleBatchNum - quadData.nTriangles;
+					if (triFill > 0) {
+						memset(pi8 + piIdx, 0, triFill * sizeof(uint8_t));
+						piIdx += triFill;
+					}
+					
+					piIdx >>= 1; //as it use one byte to store index * 3, the total number of uint16_t is piIdx/2
+					
+					uint16_t* pV16 = (uint16_t*)pVertices + piIdx;
+					float* fv = (float*)pV16;
+					for (uint32_t idx = 0; idx < quadData.nActiveVerts; idx++)
+					{
+						memcpy(fv, &quadData.verts[idx], 3 * sizeof(float));
+						fv += 3;
 					}
 				}
-
-				pIndexCurrent += quadData.nQuads;
-				for (uint32_t tidx = 0; tidx < quadData.nTriangles; tidx++)
-				{
-					pi8[piIdx++] = pIndexCurrent[tidx] * 3;
-					idxError |= pIndexCurrent[tidx] >= quadData.nActiveVerts;
+				else {
+					quadData.nActiveVerts = 0; //store center and half scale
 				}
 
-				if (idxError)
-				{
-					*outputCompressSize = 0;
-					return nullptr;
-				}
-
-
-				if ((quadData.nTriangles % 12) > 0) {
-					int triFill = 12 - (quadData.nTriangles % 12);
-					for (int tidx = 0; tidx < triFill; tidx++)
-					{
-						pi8[piIdx++] = 0;
-					}
-				}
-
-				uint16_t * pV16 = (uint16_t*)pVertices;
-				pV16 += piIdx>>1;
-
-				int pointIdx = 0;
-				for (uint32_t idx = 0; idx < quadData.nActiveVerts; idx++)
-				{
-					__m128 v0 = _mm_fmadd_ps(quadData.verts[idx], invExtents, minusRefMinInvExtents);
-					__m128i XYZ = _mm_cvttps_epi32(v0);
-					__m128i max = _mm_set1_epi32(65535);
-					XYZ = _mm_min_epi32(XYZ, max);
-					__m128i min = _mm_set1_epi32(0);
-					XYZ = _mm_max_epi32(XYZ, min);
-					uint32_t * iXYZ = (uint32_t *)&XYZ;
-					pV16[0] = iXYZ[0];
-					pV16[1] = iXYZ[1];
-					pV16[2] = iXYZ[2];
-					pV16 += 3;
-				}
-
-				*outputCompressSize = (piIdx >> 1) +  quadData.nActiveVerts * 3 + 16;
-			//	std::cout << "Byte8 Super Compressize Size " << *outputCompressSize * 2 << " Pidx " << piIdx << " Origin " << nVert * 12 + nIdx * 2 << " Now Point " << quadData.nActiveVerts << " OriginPoint " << nVert << std::endl;
-				return (unsigned short*)outputBuffer;  //this is a temp buffer, the data inside should be retrieved immediately.
 			}
 			else {
 				uint16_t * pi16 = (uint16_t*)pVertices;
 
-				int piIdx = 0;
 				for (uint32_t qidx = 0; qidx < quadData.nQuads; qidx++)
 				{
 					pi16[piIdx++] = pIndexCurrent[qidx] * 3;
-					idxError |= pIndexCurrent[qidx] >= quadData.nActiveVerts;
 				}
-				if ((quadData.nQuads & 15) > 0) {
-					int quadFill = 16 - (quadData.nQuads & 15);
-					for (int qidx = 0; qidx < quadFill; qidx++)
-					{
-						pi16[piIdx++] = 0;
-					}
+
+				int quadFill = 16 * quadBatchNum - quadData.nQuads;
+				if (quadFill > 0) {
+					memset(pi16 + piIdx, 0, quadFill * sizeof(uint16_t));
+					piIdx += quadFill;
 				}
 
 				pIndexCurrent += quadData.nQuads;
 				for (uint32_t tidx = 0; tidx < quadData.nTriangles; tidx++)
 				{
 					pi16[piIdx++] = pIndexCurrent[tidx] * 3;
-					idxError |= pIndexCurrent[tidx] >= quadData.nActiveVerts;
 				}
 
-				if (idxError)
-				{
-					*outputCompressSize = 0;
-					return nullptr;
+
+				int triFill = 12 * triangleBatchNum - quadData.nTriangles;
+				if (triFill > 0) {
+					memset(pi16 + piIdx, 0, triFill * sizeof(uint16_t));
+					piIdx += triFill;
 				}
-
-				if ((quadData.nTriangles % 12) > 0) {
-					int triFill = 12 - (quadData.nTriangles % 12);
-					for (int tidx = 0; tidx < triFill; tidx++)
-					{
-						pi16[piIdx++] = 0;
-					}
-				}
-
-				uint16_t * pV16 = (uint16_t*)pVertices  + piIdx;
-
-				int pointIdx = 0;
+				uint16_t* pV16 = (uint16_t*)pVertices + piIdx;
+				float* fv = (float*)pV16;
 				for (uint32_t idx = 0; idx < quadData.nActiveVerts; idx++)
 				{
-					__m128 v0 = _mm_fmadd_ps(quadData.verts[idx], invExtents, minusRefMinInvExtents);
-					__m128i XYZ = _mm_cvttps_epi32(v0);
-					__m128i max = _mm_set1_epi32(65535);
-					XYZ = _mm_min_epi32(XYZ, max);
-					__m128i min = _mm_set1_epi32(0);
-					XYZ = _mm_max_epi32(XYZ, min);
-					uint32_t * iXYZ = (uint32_t *)&XYZ;
-					pV16[0] = iXYZ[0];
-					pV16[1] = iXYZ[1];
-					pV16[2] = iXYZ[2];
-					pV16 += 3;
-				}
-
-				*outputCompressSize = piIdx + quadData.nActiveVerts * 3 + 16;
-			//	std::cout << "16 Compressize Size " << *outputCompressSize * 2 << " Pidx " << piIdx << " Origin " << nVert * 12 + nIdx * 2 << " Now Point " << quadData.nActiveVerts << " OriginPoint " << nVert << std::endl;
-				return (unsigned short*)outputBuffer;  //this is a temp buffer, the data inside should be retrieved immediately.
-			}
-			
-		}
-		if (common::bEnableCompressMode)
-		{
-			*outputCompressSize = 0;
-			return nullptr;
-		}
-
-		
-
-		const uint16_t* pIndexCurrent = quadData.indices;
-		if (pIndexCurrent == nullptr) pIndexCurrent = indices;
-		if (quadBatchNum > 0) {
-			__m128 tempV[16];
-			for (int batchIdx = 0; batchIdx < quadBatchNum; batchIdx++, pIndexCurrent += 16,
-				pVertices += 6)
-			{
-				if (batchIdx == quadBatchNum - 1)
-				{
-					int left = quadData.nQuads & 15;
-					if (left == 0) left = 16;
-					for (int i = 0; i < left; i += 4) //per 4 triangle one batch
-					{
-						tempV[i] = quadData.verts[pIndexCurrent[i]];
-						tempV[i + 1] = quadData.verts[pIndexCurrent[i + 1]];
-						tempV[i + 2] = quadData.verts[pIndexCurrent[i + 2]];
-						tempV[i + 3] = quadData.verts[pIndexCurrent[i + 3]];
-					}
-					if (left < 16)
-					{
-						__m128 defaultP = tempV[0];
-						for (int i = left; i < 16; i += 4)
-						{
-							tempV[i] = defaultP;
-							tempV[i + 1] = defaultP;
-							tempV[i + 2] = defaultP;
-							tempV[i + 3] = defaultP;
-						}
-					}
-
-				}
-				else
-				{
-					for (int i = 0; i < 16; i += 4) //per 4 triangle one batch
-					{
-						tempV[i] = quadData.verts[pIndexCurrent[i]];
-						tempV[i + 1] = quadData.verts[pIndexCurrent[i + 1]];
-						tempV[i + 2] = quadData.verts[pIndexCurrent[i + 2]];
-						tempV[i + 3] = quadData.verts[pIndexCurrent[i + 3]];
-					}
-				}
-
-
-				for (uint32_t j = 0; j < 4; ++j)
-				{
-					// Transform into [0,1] space relative to bounding box
-					__m128 v0 = _mm_fmadd_ps(tempV[j + 0], invExtents, minusRefMinInvExtents);
-					__m128 v1 = _mm_fmadd_ps(tempV[j + 4], invExtents, minusRefMinInvExtents);
-					__m128 v2 = _mm_fmadd_ps(tempV[j + 8], invExtents, minusRefMinInvExtents);
-					__m128 v3 = _mm_fmadd_ps(tempV[j + 12], invExtents, minusRefMinInvExtents);
-
-					// Transpose into [xxxx][yyyy][zzzz][wwww]
-					_MM_TRANSPOSE4_PS(v0, v1, v2, v3);
-
-
-					__m128i X = _mm_cvttps_epi32(v0);
-					__m128i Y = _mm_cvttps_epi32(v1);
-					__m128i Z = _mm_cvttps_epi32(v2);
-
-					//this is to force into the range[0, 0xFFFF]
-					__m128i max = _mm_set1_epi32(65535);
-					X = _mm_min_epi32(X, max);
-					Y = _mm_min_epi32(Y, max);
-					Z = _mm_min_epi32(Z, max);
-					__m128i min = _mm_set1_epi32(0);
-					X = _mm_max_epi32(X, min);
-					Y = _mm_max_epi32(Y, min);
-					Z = _mm_max_epi32(Z, min);
-
-					if ((j & 1) == 0) {
-						X = _mm_slli_epi32(X, 16);
-						Y = _mm_slli_epi32(Y, 16);
-						Z = _mm_slli_epi32(Z, 16);
-					}
-
-					int pIdx = (j >> 1);  //0 or 1
-					pVertices[pIdx] = _mm_or_si128(pVertices[pIdx], X); //01 for X,  23 for Y, 45 for Z
-					pVertices[pIdx + 2] = _mm_or_si128(pVertices[pIdx + 2], Y);
-					pVertices[pIdx + 4] = _mm_or_si128(pVertices[pIdx + 4], Z);
-
+					memcpy(fv, &quadData.verts[idx], 3 * sizeof(float));
+					fv += 3;
 				}
 			}
 
+			*outputCompressSize = piIdx + quadData.nActiveVerts * 6 + 8 * 4;
+			delete pBakeBuffer;
+			return outputBuffer16;  //this is a temp buffer, the data inside should be retrieved immediately.
 		}
-
-		int64_t used = pVertices - compressData;
-		assert(used == 2 + quadBatchNum * 6);
-		if (triangleBatchNum > 0)
-		{
-			__m128 tempV[12];
-
-			pIndexCurrent = quadData.indices;
-			if (pIndexCurrent == nullptr) pIndexCurrent = indices;
-			pIndexCurrent += quadData.nQuads;
-			__m128i ZTemp[3];
-			for (int i = 0; i < triangleBatchNum; i++) //per 4 triangle one batch
-			{
-				uint32_t startFaceIdx = i << 2;
-				uint32_t qIdxEnd = std::min<uint32_t>(4, triangleFaceNum - startFaceIdx) * 3;
-
-				unsigned int qIdx3 = 0;
-				for (; qIdx3 < qIdxEnd; pIndexCurrent += 3, qIdx3 += 3)
-				{
-					tempV[qIdx3] = quadData.verts[pIndexCurrent[0]];
-					tempV[qIdx3 + 1] = quadData.verts[pIndexCurrent[2]];
-					tempV[qIdx3 + 2] = quadData.verts[pIndexCurrent[1]];
-				}
-
-				while (qIdx3 < 12)
-				{
-					auto p = tempV[0];
-					tempV[qIdx3] = p;
-					tempV[qIdx3 + 1] = p;
-					tempV[qIdx3 + 2] = p;
-					qIdx3 += 3;
-				}
-
-				for (uint32_t j = 0; j < 3; ++j)
-				{
-					// Transform into [0,1] space relative to bounding box
-					__m128 v0 = _mm_fmadd_ps(tempV[j + 0], invExtents, minusRefMinInvExtents);
-					__m128 v1 = _mm_fmadd_ps(tempV[j + 3], invExtents, minusRefMinInvExtents);
-					__m128 v2 = _mm_fmadd_ps(tempV[j + 6], invExtents, minusRefMinInvExtents);
-					__m128 v3 = _mm_fmadd_ps(tempV[j + 9], invExtents, minusRefMinInvExtents);
-
-					// Transpose into [xxxx][yyyy][zzzz][wwww]
-					_MM_TRANSPOSE4_PS(v0, v1, v2, v3);
-
-
-					__m128i X = _mm_cvttps_epi32(v0);
-					__m128i Y = _mm_cvttps_epi32(v1);
-					__m128i Z = _mm_cvttps_epi32(v2);
-
-					//this is to force into the range[0, 0xFFFF]
-					__m128i max = _mm_set1_epi32(65535);
-					X = _mm_min_epi32(X, max);
-					Y = _mm_min_epi32(Y, max);
-					Z = _mm_min_epi32(Z, max);
-					__m128i min = _mm_set1_epi32(0);
-					X = _mm_max_epi32(X, min);
-					Y = _mm_max_epi32(Y, min);
-					Z = _mm_max_epi32(Z, min);
-
-					__m128i XY = _mm_or_si128(_mm_slli_epi32(X, 16), Y);
-
-					pVertices[j] = XY;
-					ZTemp[j] = Z;
-				}
-				pVertices[3] = _mm_or_si128(_mm_slli_epi32(ZTemp[1], 16), ZTemp[2]);
-
-
-				uint16_t* t16 = (uint16_t*)ZTemp;
-				uint64_t t = t16[0];
-				uint64_t t1 = t16[2];
-				uint64_t t2 = t16[4];
-				uint64_t t3 = t16[6];
-				t |= t1 << 16;
-				t |= t2 << 32;
-				t |= t3 << 48;
-
-				if ((i & 1) == 0)
-				{
-					uint64_t * r = (uint64_t*)(pVertices + 4);
-					r[0] = t;
-					pVertices += 5;
-				}
-				else {
-					uint64_t * r = (uint64_t*)(pVertices);
-					r = r - 1;
-					r[0] = t;
-
-					pVertices += 4;
-				}
-			}
-
-		}
-		used = pVertices - compressData;
-		assert(used == compressSize);
-
-		*outputCompressSize = (int)used * 8; 
-		//if (((used * 16)  * 100.0 / (nVert * 12 + nIdx * 2)) > 90.0f) 
-		//{
-		//	std::cout << "Current Model save idx " << DebugOccluderIdx << std::endl;
-		//}
-		//std::cout << "***********ByteUsed " << (used * 16) << " Original " << (nVert * 12 + nIdx * 2) << " Ratio " << ((used * 16)  * 100.0 / (nVert * 12 + nIdx * 2)) << "%" << std::endl;
-
-		return (unsigned short*)outputBuffer;  //this is a temp buffer, the data inside should be retrieved immediately.
+		delete pBakeBuffer;
+		*outputCompressSize = 0;
+		return nullptr;
 	}
 
 
@@ -2485,7 +2596,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 		if (saveModel)
 		{
 			std::string savedFile = std::to_string(modelId) + std::string("_Input.OFF");
-			LOGI("save: %s", SOCLogger::GetOutputDirectory() + savedFile.c_str());
+			LOGI("save: %s", (SOCLogger::GetOutputDirectory() + savedFile).c_str());
 			util::OccluderQuad::storeModel(SOCLogger::GetOutputDirectory() + savedFile, vertices, nVert, indices, nIdx);
 		}
 
@@ -2501,15 +2612,74 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 			if (saveModel)
 			{
 				std::string savedFile = std::to_string(modelId) + std::string("_LOD.OFF");
-				LOGI("save: %s", SOCLogger::GetOutputDirectory() + savedFile.c_str());
+				LOGI("save: %s", (SOCLogger::GetOutputDirectory() + savedFile).c_str());
 				util::OccluderQuad::storeModel(SOCLogger::GetOutputDirectory() + savedFile, vertices, nVert, indices, nIdx);
 			}
 		}
 		return bValid;
 	}
 
+	bool OccluderQuad::MergeTriangleIntoQuad(MeshFace* face, MeshQuad* mq, util::MeshVertex& vert, __m128* points, util::MeshVertex* vertices)
+	{
+		if (mq->IsPlanarQuad == false) return false;
+		float t1 = dotSum3(face->UnitNormal, mq->face1->UnitNormal);
+		float th = QuadTwoSameFaceTh;
+		if (t1 <= 0.9999)
+		{
+			return false;
+		}
+		else {
+			bool b1 = mq->containPoint(face->nVertIdx[0]);
+			bool b2 = mq->containPoint(face->nVertIdx[1]);
+			bool b3 = mq->containPoint(face->nVertIdx[2]);
+			int count = (int)b1;
+			count += (int)b2;
+			count += (int)b3;
+			if (count != 2) return false;
+			int pivot = 0;
+			if (b2 == false) pivot = 1;
+			if (b3 == false) pivot = 2;
+
+			bool quadMap[4];
+			for (int idx = 0; idx < 4; idx++) {
+				quadMap[idx] = face->containPoint(mq->vIdx[idx]);
+			}
+			int pivotIdx = face->nVertIdx[pivot];
+			for (int idx = 0; idx < 4; idx++) {
+				if (quadMap[idx] && quadMap[(idx + 1) & 3]) {
+					uint16_t corner1 = mq->vIdx[(idx + 3) & 3];
+					uint16_t corner2 = mq->vIdx[(idx + 2) & 3];
+					bool line1 = sameLine(points, pivotIdx, mq->vIdx[idx], corner1);
+					bool line2 = sameLine(points, pivotIdx, mq->vIdx[(idx + 1) & 3], corner2);
+					if ((line1 && !line2) || (!line1 && line2) ){
+						float combineArea = getArea(points[pivotIdx], points[corner1], points[corner2]);
+						float AreaSum = face->area + mq->quad_area;
+						if (combineArea < AreaSum) {
+							int targetIdx = idx;
+							if (!line1 && line2) {
+								targetIdx = (idx + 1) & 3;
+							}
+							uint16_t backup = mq->vIdx[targetIdx];
+							mq->vIdx[targetIdx] = pivotIdx;
+							util::MeshVertex& mv = vertices[backup];
+							mv.RemoveQuad(mq->qIdx);
+							face->ValidSingleTriangle = false;
+							mq->quad_area += face->area;
+							return true;
+						}
+						else {
+							//std::cout << "concave merge. reject!" << std::endl;
+						}
+					}
+				}
+			}
+			
+		}
+		return false;
+	}
+
 	static int mModelID = 10000;
-	unsigned short* OccluderQuad::sdocMeshLodBake(int* outputCompressSize, const float* vertices, const unsigned short* indices, unsigned int nVert, unsigned int nIdx, float quadAngle, bool enableBackfaceCull, bool counterClockWise, int TerrainGridAxisPoint)
+		unsigned short* OccluderQuad::sdocMeshLodBake(int* outputCompressSize, const float* vertices, const unsigned short* indices, unsigned int nVert, unsigned int nIdx, float quadAngle, bool enableBackfaceCull, bool counterClockWise, int TerrainGridAxisPoint)
 	{
 
 		bool simplifyMesh = false;
@@ -2527,18 +2697,147 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 
 			auto startTime = std::chrono::high_resolution_clock::now();
 
-			bool bValid = sdocMeshSimplify(vp.data(), vi.data(), reducedVertNum, reducedIdxNum, mModelID++,	std::min<int>(3000, nIdx / 3 * 0.9), true);
+			bool bValid = sdocMeshSimplify(vp.data(), vi.data(), reducedVertNum, reducedIdxNum, mModelID++, std::min<int>(3000, (int)(nIdx / 3 * 0.9)), true);
 
 
 			if (bValid)
 			{
 				std::cout << "Simplified from " << nIdx / 3 << "  " << reducedIdxNum << std::endl;
-				unsigned short* data = util::OccluderQuad::sdocMeshBake(outputCompressSize, vp.data(), vi.data(), reducedVertNum, reducedIdxNum, quadAngle, enableBackfaceCull, counterClockWise, TerrainGridAxisPoint);				
+				unsigned short* data = util::OccluderQuad::sdocMeshBake(outputCompressSize, vp.data(), vi.data(), reducedVertNum, reducedIdxNum, quadAngle, enableBackfaceCull, counterClockWise, TerrainGridAxisPoint);
 				return data;
 			}
 		}
-		unsigned short* data = util::OccluderQuad::sdocMeshBake(outputCompressSize, vertices, indices, nVert, nIdx, quadAngle, enableBackfaceCull, counterClockWise, TerrainGridAxisPoint);
-		return data;
+		return util::OccluderQuad::sdocMeshBake(outputCompressSize, vertices, indices, nVert, nIdx, quadAngle, enableBackfaceCull, counterClockWise, TerrainGridAxisPoint);
+
+	}
+
+	bool OccluderQuad::sameLine(__m128* points, uint16_t a, uint16_t b, uint16_t c)
+	{
+		__m128 pa = points[a];
+		__m128 pb = points[b];
+		__m128 pc = points[c];
+
+		float t1 = dotSum3(normalize(_mm_sub_ps(pa, pb)), normalize(_mm_sub_ps(pb, pc)));
+		if (t1 >= 0.9998)
+			return true;
+		return false;
+	}
+	int OccluderQuad::getAABBMode(util::QuadTriIndex &quadData, const uint16_t* pIndexCurrent)
+	{
+		bool print = false;
+		if (print) {
+			uint16_t mBake2[48];
+			mBake2[0] = 0;
+			mBake2[1] = 6;
+			mBake2[2] = 9;
+			mBake2[3] = 3;
+			mBake2[4] = 3;
+			mBake2[5] = 9;
+			mBake2[6] = 21;
+			mBake2[7] = 15;
+			mBake2[8] = 15;
+			mBake2[9] = 21;
+			mBake2[10] = 18;
+			mBake2[11] = 12;
+			mBake2[12] = 12;
+			mBake2[13] = 18;
+			mBake2[14] = 6;
+			mBake2[15] = 0;
+			mBake2[16] = 12;
+			mBake2[17] = 0;
+			mBake2[18] = 3;
+			mBake2[19] = 15;
+			mBake2[20] = 6;
+			mBake2[21] = 18;
+			mBake2[22] = 21;
+			mBake2[23] = 9;
+			mBake2[24] = 24;
+			mBake2[25] = 30;
+			mBake2[26] = 33;
+			mBake2[27] = 27;
+			mBake2[28] = 27;
+			mBake2[29] = 33;
+			mBake2[30] = 45;
+			mBake2[31] = 39;
+			mBake2[32] = 39;
+			mBake2[33] = 45;
+			mBake2[34] = 42;
+			mBake2[35] = 36;
+			mBake2[36] = 36;
+			mBake2[37] = 42;
+			mBake2[38] = 30;
+			mBake2[39] = 24;
+			mBake2[40] = 36;
+			mBake2[41] = 24;
+			mBake2[42] = 27;
+			mBake2[43] = 39;
+			mBake2[44] = 30;
+			mBake2[45] = 42;
+			mBake2[46] = 45;
+			mBake2[47] = 33;
+			uint64_t* bakeData3 = (uint64_t*)mBake2;
+			for (int idx = 0; idx < 12; idx++) {
+				std::cout << "bakeData[" << idx << "]=" << bakeData3[idx] / 3 << ";" << std::endl;
+			}
+		}
+
+		uint64_t bakeData[6];
+		bakeData[0] = 281487861743616;
+		bakeData[1] = 1407404948520961;
+		bakeData[2] = 1125925677105157;
+		bakeData[3] = 8590327812;
+		bakeData[4] = 1407379178520580;
+		bakeData[5] = 844454995296258;
+		uint64_t* inputData = (uint64_t*)pIndexCurrent;
+		if (quadData.nQuads == 24 && quadData.nActiveVerts == 8) {
+			for (int idx = 0; idx < 6; idx++) {
+				if (bakeData[idx] != inputData[idx]) {
+					return 0;
+				}
+			}
+			__m128 verts[8];
+			memcpy(verts, quadData.verts, 8 * sizeof(__m128));
+
+			float* minf = (float*)&quadData.refMin;
+			float* maxf = (float*)&quadData.refMax;
+			float* vertf = (float*)quadData.verts;
+
+			bool b1 = (vertf[0] == minf[0] && vertf[1] == minf[1] && vertf[2] == maxf[2]);
+			bool b2 = (vertf[4] == maxf[0] && vertf[5] == minf[1] && vertf[6] == maxf[2]);
+			bool b3 = (vertf[8] == minf[0] && vertf[9] == minf[1] && vertf[10] == minf[2]);
+			bool b4 = (vertf[12] == maxf[0] && vertf[13] == minf[1] && vertf[14] == minf[2]);
+			bool b5 = (vertf[16] == minf[0] && vertf[17] == maxf[1] && vertf[18] == maxf[2]);
+			bool b6 = (vertf[20] == maxf[0] && vertf[21] == maxf[1] && vertf[22] == maxf[2]);
+			bool b7 = (vertf[24] == minf[0] && vertf[25] == maxf[1] && vertf[26] == minf[2]);
+			bool b8 = (vertf[28] == maxf[0] && vertf[29] == maxf[1] && vertf[30] == minf[2]);
+			if (b1 && b2 && b3 && b4 && b5 && b6 && b7 && b8) {
+				//std::cout << "----------------------------> min max -------------------------------------->" << std::endl;
+				return 1;
+			}
+		}		
+		return 0;
+	}
+	void OccluderQuad::ConfigDebugOccluder(int occluderID, uint16_t* CompactData)
+	{
+		DebugOccluderID = occluderID;
+		if (CompactData != nullptr) {
+			std::cout << "todo" << std::endl;
+		}
+	}
+
+	void OccluderBakeBuffer::QuickMerge(MeshQuad* q0, MeshQuad* q1, float mergeQuadTh, __m128* points, MeshVertex*& Vertices, int& neighborMergeCount, float lineLinkTH, bool allowDiffKidMerge ){
+		
+		if ( (q0->QuadKids == q1->QuadKids && q0->QuadKids > 0) ||(allowDiffKidMerge && q0->QuadKids > 0 && q1->QuadKids > 0))		
+		{
+			if (q0->IsPlanarQuad && q1->IsPlanarQuad) {
+				q0->MergeWith(q1, mergeQuadTh, points, Vertices, false, neighborMergeCount, lineLinkTH);
+			}
+		}
+	}
+
+	bool MeshFace::containPoint(uint16_t vIdx)
+	{
+		return this->nVertIdx[0] == vIdx || this->nVertIdx[1] == vIdx || this->nVertIdx[2] == vIdx;
 	}
 
 }

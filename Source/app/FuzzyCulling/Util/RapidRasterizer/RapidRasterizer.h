@@ -29,6 +29,7 @@ public:
 	bool backfaceCull = true;
 	bool IsRawMesh = false;
 	bool IsValidRawMesh = false;
+	bool IsOccludee = false;
 	uint16_t priority = 0;
 	unsigned int nVert = 0;
 	unsigned int nIdx = 0;
@@ -74,6 +75,7 @@ public:
 
 			occ = mPool[mCurrentOccNum++];
 		}
+		occ->IsOccludee = false;
 		return occ;
 	}
 
@@ -99,12 +101,6 @@ public:
 	void OnRenderEnd();
 
 };
-class OccluderAABB
-{
-public:
-	const float * LastOccluderVertices = nullptr;
-	__m128 OccluderMinExtent[2];
-};
 class RapidRasterizer
 {
 public:
@@ -123,7 +119,7 @@ public:
 
 
 	Rasterizer* m_instance = nullptr;
-	bool batchQuery(const float * bbox, unsigned int nMesh, bool * results);
+	bool batchQuery(const float * bbox, unsigned int nMesh, bool * results, bool obbMode);
 
 	bool mShowCulled = false; //default to be false
 	bool mInRenderingState = false;
@@ -141,11 +137,12 @@ public:
 	void SetCCW(bool IsModelCCW);
 	int GetCW();
 	void ShowOccludeeInDepthmap(int value);
-	void onNewFrame(uint64_t frame, bool criticalFrame, bool isRotating);
+	void onNewFrame(uint64_t frame, bool criticalFrame, bool isRotating, const float* CameraPos);
 
 
 	void setRenderType(int renderType);
 	bool SubmitRawOccluder(const float * vertices, const unsigned short * indices, unsigned int nVert, unsigned int nIdx,  const float * localToWorld, bool backfaceCull);
+	bool QueryRawOccludee(const float* vertices, const unsigned short* indices, unsigned int nVert, unsigned int nIdx, const float* localToWorld, bool backfaceCull, const float* WorldAABB);
 	bool RasterizeOccluder(OccluderInput * occ);
 	void SubmitBakedOccluder(unsigned short * inVtx, const float * modelWorld);
 	void UsePrevDepthData();
@@ -161,21 +158,19 @@ public:
 
 private:
 	void FlushCachedOccluder(int endOccluderNum);
-	__m128* CalculateAABB(unsigned int nVert, const float * inVtx);
+	void CalculateMeshMinExtent(unsigned int nVert, const float * inVtx, float* minExtent);
 public:
 	void EnablePriorityQueue(bool value);
 	bool mSortByPriorityQueue = false;
 
 
-	//cache 4 AABB
-	OccluderAABB *AABBCache = nullptr;// [4];
-	int AABBNextStoreIdx = 0;
-	int mValidAABB = 0;
 
 	void SyncOccluderPVS(bool* value);
 	int mInvalidRawMeshNum = 0;
 	int mInvalidRawMeshGroup = 0;
 	void ConfigQueryChildData(uint16_t* value);
+private:
+	bool RasterizeOccludeeMesh(OccluderInput* occ, const float* worldAABB);
 };
 
 } // namespace util

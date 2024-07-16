@@ -5,7 +5,7 @@
 //                              SPDX-License-Identifier: BSD-3-Clause
 //
 //============================================================================================================
-#include "Common/SOCUtil.h"
+#include "../SOCUtil.h"
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,7 +24,7 @@
 #if defined(SDOC_WIN)
 #pragma warning( disable : 4996  )
 #endif
-#include "Util/RapidRasterizer/RapidRasterizer.h"
+#include "../../Util/RapidRasterizer/RapidRasterizer.h"
 
 
 
@@ -86,29 +86,64 @@ namespace common
 
 		if (this->mCaptureFrame) 
 		{
-			RecordOccluder(vertices, indices, nVert, nIdx, localToWorld, backfaceCull);
+			RecordOccluder(vertices, indices, nVert, nIdx, localToWorld, backfaceCull, "");
 		}
+	}
+	bool SOCFrameInfo::queryOccludeeMesh(const float* vertices, const unsigned short* indices,
+		unsigned int nVert, unsigned int nIdx,
+		const float* localToWorld, bool backfaceCull)
+	{
+		bool result =	this->m_rapidRasterizer->QueryRawOccludee(vertices, indices, nVert, nIdx, localToWorld, backfaceCull, nullptr);
+		
+		if (this->mCaptureFrame)
+		{
+			RecordOccluder(vertices, indices, nVert, nIdx, localToWorld, backfaceCull, "");
+		}
+		return result;
 	}
 #endif
 
 
 
-    void SOCFrameInfo::recordOccludee(const float *vertices, unsigned int num)
+    void SOCFrameInfo::recordOccludee(const float *vertices, unsigned int num, bool obbQuery)
     {
 		if (mFileWriter == nullptr) {
 			return;
 		}
+
+		const std::lock_guard<std::mutex> lock(mWriteMutex);
 		// batch queries
-		fprintf(mFileWriter, "%s\n", BATCHED_OCE_HEADER.c_str());
+		if(obbQuery == false)
+			fprintf(mFileWriter, "%s\n", BATCHED_OCE_HEADER.c_str());
+		else
+			fprintf(mFileWriter, "%s\n", BATCHED_OCE_HEADER_OBB.c_str());
 		fprintf(mFileWriter, "%d\n", num);
 		const float * boxPtr = vertices;
-		for (uint32_t i = 0; i < num; ++i, boxPtr += BBOX_STRIDE)
-		{
-			fprintf(mFileWriter, "%f %f %f\n%f %f %f\n",
-				boxPtr[0], boxPtr[1], boxPtr[2],
-				boxPtr[3], boxPtr[4], boxPtr[5]);
+		if (obbQuery == false) {
+			for (uint32_t i = 0; i < num; ++i, boxPtr += BBOX_STRIDE)
+			{
+				fprintf(mFileWriter, "%.9g %.9g %.9g\n%.9g %.9g %.9g\n",
+					boxPtr[0], boxPtr[1], boxPtr[2],
+					boxPtr[3], boxPtr[4], boxPtr[5]);
+			}
 		}
-        
+		else {
+			//record 18 float
+			for (uint32_t i = 0; i < num; ++i, boxPtr += BBOX_STRIDE)
+			{
+				fprintf(mFileWriter, "%.9g %.9g %.9g\n%.9g %.9g %.9g\n",
+					boxPtr[0], boxPtr[1], boxPtr[2],
+					boxPtr[3], boxPtr[4], boxPtr[5]);
+				boxPtr += BBOX_STRIDE;
+				fprintf(mFileWriter, "%.9g %.9g %.9g\n%.9g %.9g %.9g\n",
+					boxPtr[0], boxPtr[1], boxPtr[2],
+					boxPtr[3], boxPtr[4], boxPtr[5]);
+				boxPtr += BBOX_STRIDE;
+				fprintf(mFileWriter, "%.9g %.9g %.9g\n%.9g %.9g %.9g\n",
+					boxPtr[0], boxPtr[1], boxPtr[2],
+					boxPtr[3], boxPtr[4], boxPtr[5]);
+			}
+		}
 	}
 
 	void SOCFrameInfo::StopFrameCapture()
@@ -132,8 +167,9 @@ namespace common
 	}
 
 
-	void SOCFrameInfo::StartRecordFrame(const float * CameraPos, const float * ViewDir, const float * vp) 
+	void SOCFrameInfo::StartRecordFrame(const float * InCameraPos, const float * ViewDir, const float * vp) 
 	{
+		const std::lock_guard<std::mutex> lock(mWriteMutex);
 		// get name and open the file
 		std::string outputDir = SOCLogger::GetOutputDirectory();
 
@@ -175,26 +211,27 @@ namespace common
 		// width, height, nearplane
 		fprintf(mFileWriter, "%s\n", FB_SETTING_HEADER.c_str());
 		int cw = m_rapidRasterizer->GetCW() * 1000000;
-		fprintf(mFileWriter, "%d %d %f\n", this->Width, this->Height + cw, this->NearPlane);
+		fprintf(mFileWriter, "%d %d %.9g\n", this->Width, this->Height + cw, this->NearPlane);
 
 		fprintf(mFileWriter, "Frame\n");
 		fprintf(mFileWriter, "1\n");
 		fprintf(mFileWriter, "%s\n", CAM_POS_HEADER.c_str());
-		fprintf(mFileWriter, "%f %f %f %f %f %f\n", CameraPos[0], CameraPos[1], CameraPos[2], ViewDir[0], ViewDir[1], ViewDir[2]);
+		fprintf(mFileWriter, "%.9g %.9g %.9g %.9g %.9g %.9g\n", InCameraPos[0], InCameraPos[1], InCameraPos[2], ViewDir[0], ViewDir[1], ViewDir[2]);
 
 		fprintf(mFileWriter, "%s\n", VIEW_PROJ_HEADER.c_str());
 
-		fprintf(mFileWriter, "%f %f %f %f\n", vp[0], vp[1], vp[2], vp[3]);
-		fprintf(mFileWriter, "%f %f %f %f\n", vp[4], vp[5], vp[6], vp[7]);
-		fprintf(mFileWriter, "%f %f %f %f\n", vp[8], vp[9], vp[10], vp[11]);
-		fprintf(mFileWriter, "%f %f %f %f\n", vp[12],vp[13], vp[14], vp[15]);
+		fprintf(mFileWriter, "%.9g %.9g %.9g %.9g\n", vp[0], vp[1], vp[2], vp[3]);
+		fprintf(mFileWriter, "%.9g %.9g %.9g %.9g\n", vp[4], vp[5], vp[6], vp[7]);
+		fprintf(mFileWriter, "%.9g %.9g %.9g %.9g\n", vp[8], vp[9], vp[10], vp[11]);
+		fprintf(mFileWriter, "%.9g %.9g %.9g %.9g\n", vp[12], vp[13], vp[14], vp[15]);
+
 		
 		
 	}
 
-	void SOCFrameInfo::RecordOccluder(const float * vertices, const unsigned short * indices, unsigned int nVert, unsigned int nIdx, const float * localToWorld, int backfaceCull)
+	void SOCFrameInfo::RecordOccluder(const float * vertices, const unsigned short * indices, unsigned int nVert, unsigned int nIdx, const float * localToWorld, int backfaceCull, std::string prefix)
 	{
-
+		const std::lock_guard<std::mutex> lock(mWriteMutex);
 		auto fptr = mFileWriter;
 
 		uint32_t nFace = nIdx/3;
@@ -218,7 +255,7 @@ namespace common
 
 			//uint16_t *pIdx = meta + 16; //first 16 uint16 for metadata and aabb
 			
-			int vertSize = vertNum * 3;
+			int vertSize = vertNum * 6; //currently save vert as float, rather than uint16
 
 			int total16 = vertSize + idxNum + 16;
 
@@ -226,7 +263,14 @@ namespace common
 			int left = (total16 & 7);
 
 			uint16_t * data = (uint16_t*)vertices;
-			fprintf(fptr, "CompactOccluder\n");
+
+			if (prefix == "Query") {
+				fprintf(fptr, "QueryCompactOccluder\n");
+			}
+			else {
+				fprintf(fptr, "CompactOccluder\n");
+			}
+
 			fprintf(fptr, "%d\n", (int)(total16 + 7) >> 3);
 
 			for (int i_vert = 0; i_vert < line8; ++i_vert, data += 8)
@@ -248,13 +292,19 @@ namespace common
 			
 		}
 		else {
-			fprintf(fptr, "Occluder\n");
+			if (prefix == "Query") {
+				fprintf(fptr, "QueryOccluder\n");
+			}
+			else {
+				fprintf(fptr, "Occluder\n");
+			}
+
 			int backfaceCullOff = !backfaceCull;
 			fprintf(fptr, "%d %d\n", (int)nVert + (backfaceCullOff * 10000000), (int)nFace); //encode backface cull property into occluder record
 
 			for (uint32_t i_vert = 0; i_vert < nVert; ++i_vert)
 			{
-				fprintf(fptr, "%f %f %f\n", vertices[i_vert * 3 + 0], vertices[i_vert * 3 + 1], vertices[i_vert * 3 + 2]);
+				fprintf(fptr, "%.9g %.9g %.9g\n", vertices[i_vert * 3 + 0], vertices[i_vert * 3 + 1], vertices[i_vert * 3 + 2]);
 			}
 
 			for (uint32_t i_face = 0; i_face < nFace; ++i_face)
@@ -263,10 +313,18 @@ namespace common
 			}
 		}
 
-		const float * pose = localToWorld;
-		for (int i = 0; i < 4; i++, pose+= 4) 
-		{
-			fprintf(fptr, "%f %f %f %f\n", pose[0], pose[1], pose[2], pose[3]);
+		if (localToWorld == nullptr) {
+			fprintf(fptr, "%.9g %.9g %.9g %.9g\n", 1.0, 0.0, 0.0, 0.0);
+			fprintf(fptr, "%.9g %.9g %.9g %.9g\n", 0.0, 1.0, 0.0, 0.0);
+			fprintf(fptr, "%.9g %.9g %.9g %.9g\n", 0.0, 0.0, 1.0, 0.0);
+			fprintf(fptr, "%.9g %.9g %.9g %.9g\n", 0.0, 0.0, 0.0, 1.0);
+		}
+		else {
+			const float* pose = localToWorld;
+			for (int i = 0; i < 4; i++, pose += 4)
+			{
+				fprintf(fptr, "%.9g %.9g %.9g %.9g\n", pose[0], pose[1], pose[2], pose[3]);
+			}
 		}
 	}
 

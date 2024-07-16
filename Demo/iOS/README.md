@@ -22,7 +22,7 @@ Tested with the following combinations:
 
 
 - Code: iQOCWrapper
-- Lib: Replace latest libSDOC.quic.a to QOC.quic
+- Lib: Replace latest libSDOC.quic.a (built from iOS Build the static library) to QOC.quic
 
 ## Update iOS Framework
 

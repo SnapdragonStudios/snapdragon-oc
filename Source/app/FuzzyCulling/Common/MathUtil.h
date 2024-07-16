@@ -27,13 +27,13 @@ namespace common
 	static const std::string CAM_POS_HEADER = "Camera PosDir";
 	static const std::string VIEW_PROJ_HEADER = "View Projection Matrix";
 	static const std::string BATCHED_OCE_HEADER = "Batched Occludee";
+	static const std::string BATCHED_OCE_HEADER_OBB = "Batched OccludeeOBB";
 	static const uint32_t    BBOX_STRIDE = 6;
 
 	static constexpr bool bDumpCheckerboardImage = 0;
 	static constexpr bool bDumpCheckerboardImageBlack = 0;
 	static constexpr bool bDumpCheckerboardImageBinary = 0;
 
-	static constexpr bool bCompareImoCSDOCResult = false;
 
 #if defined(SDOC_NATIVE)
     static constexpr bool IS_ARM_PLATFORM = false;
@@ -48,7 +48,6 @@ namespace common
 
 	static constexpr int START_FRAME_COUNT = 2; //Frame 3 would be the first frame. 
 
-	static constexpr bool bEnableCompressMode = 1;
 	static constexpr int SuperCompressVertNum = 1 + (255 / 3);
 
 

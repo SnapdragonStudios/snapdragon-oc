@@ -41,7 +41,7 @@ Android demo to verify libSDOC.quic.so
 ### OSX
 1. Install CMake 3.0 or higher.
 2. Install the latest version of Xcode.
-3. Open the **Terminal** at the source folder and enter `Source/app/FuzzyCuling`, execute the following command to generate Xcode project to `build` folder.
+3. Open the **Terminal** at the source folder and enter `Source/app/FuzzyCulling`, execute the following command to generate Xcode project to `build` folder.
    ```   
    chmod 755 GenerateProjectFiles_Mac.command
    GenerateProjectFiles_Mac.command
@@ -57,8 +57,8 @@ Build the static library
 1. Sync the submodule to get [ios-cmake](https://github.com/leetal/ios-cmake.git). 
    git submodule init
    git submodule update   
-   You might need to call "git submodule add https://github.com/leetal/ios-cmake.git" in the directory of sdoc\Source\app\submodules if submodule init/update fail
-2. Open the **Terminal** at the source folder and enter `Source/app/FuzzyCuling`, execute the following command to generate Xcode project to `build` folder.
+   You might need to call "git submodule add https://github.com/leetal/ios-cmake.git" in the directory of Source\app\submodules if submodule init/update fail
+2. Open the **Terminal** at the source folder and enter `Source/app/FuzzyCulling`, execute the following command to generate Xcode project to `build` folder.
    ```
    chmod 755 GenerateProjectFiles_ios.command
    GenerateProjectFiles_ios.command

@@ -25,6 +25,10 @@
 #endif
 #include "Util/RapidRasterizer/OccluderQuad.h"
 
+#if defined(SDOC_NATIVE_DEBUG)&& defined(SDOC_NATIVE)
+#include <thread>
+using namespace std;
+#endif
 
 #if defined(SDOC_WIN)
 #pragma warning( disable : 4996  )
@@ -34,6 +38,9 @@ using namespace common;
 namespace
 {
 
+#if defined(SDOC_NATIVE_DEBUG)&& defined(SDOC_NATIVE)
+	static constexpr int nOcludeeOBBSize = 18;   //Debug: change to 12 if input only 4 points, otherwise 18
+#endif
 
 
 static bool dumpOccluderOccludeeColorImage(const std::string &filename, unsigned char *input, unsigned int width, unsigned int height)
@@ -279,21 +286,21 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 	}
 	criticalFrame |= this->mResolutionChanged;
 	this->mResolutionChanged = false;
-	this->m_rapidRasterizer->onNewFrame(m_frameInfo->FrameCounter, criticalFrame, isRotating);
+	this->m_rapidRasterizer->onNewFrame(m_frameInfo->FrameCounter, criticalFrame, isRotating, CameraPos);
 
 	
 }
 
-    bool SOCPrivate::batchQuery(const float *bbox, unsigned int nMesh, bool *results) 
+    bool SOCPrivate::batchQuery(const float *bbox, unsigned int nMesh, bool *results, bool obbMode) 
 	{
-		bool result = m_rapidRasterizer->batchQuery(bbox, nMesh, results);
+		bool result = m_rapidRasterizer->batchQuery(bbox, nMesh, results, obbMode);
 
 
 		if (m_frameInfo->mIsRecording)
 		{
 			if (results != nullptr) 
 			{
-				m_frameInfo->recordOccludee(bbox, nMesh);
+				m_frameInfo->recordOccludee(bbox, nMesh, obbMode);
 			}
 		}
 
@@ -438,7 +445,7 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 			float localToWorld[16];
 
 			unsigned int CompactSize;
-			short* CompactData = nullptr;
+			uint16_t* CompactData = nullptr;
 
 			
 			~OccluderData()
@@ -450,22 +457,20 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 
 			void CompressModel()
 			{
+				util::OccluderQuad::ConfigDebugOccluder(occluderID, CompactData);
 				if (CompactData != nullptr) return;
-
-				//util:: OccluderQuad::TestModel();
 
 				int outputCompressSize = 0;
 				auto initStartTime = std::chrono::high_resolution_clock::now();
-				unsigned short * output = sdocMeshBake(&outputCompressSize, this->Vertices, this->Indices, this->VerticesNum, this->nIdx, 15, true, true, 0);
-				if (output != nullptr)
-				{
-					CompactData = new short[outputCompressSize];
-					memcpy(CompactData, output, outputCompressSize * sizeof(short));
-				}
-			//	auto time = (int)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - initStartTime).count();
+				CompactData = sdocMeshBake(&outputCompressSize, this->Vertices, this->Indices, this->VerticesNum, this->nIdx, 15, true, true, 0);
+				
+				if (CompactData != nullptr) {
+					uint16_t queryQuadTriangle[6];
+					memcpy(queryQuadTriangle + 2, CompactData, 4 * sizeof(uint16_t));
+					util::OccluderQuad::Get_BakeData_QuadTriangleNum(queryQuadTriangle);
 
-			//	LOGI("Input VertexNum %d Bake  %d Raw %d  Ratio %f%%", VerticesNum,  outputCompressSize * 2, VerticesNum * 12 + nIdx * 2, outputCompressSize * 2 * 100.0f/ (VerticesNum * 12 + nIdx * 2));
-				//LOGI("Total Bake Time(ms) used %f  Face  %d  VerticesNum %d", (time * 1.0 / 1000), nIdx / 3, VerticesNum);
+					//std::cout << "Baked Quad " << queryQuadTriangle[0] << " Triangle " << queryQuadTriangle[1] << " From original triangle " << (nIdx / 3) << std::endl;
+				}
 				compressedCount++;
 			}
 
@@ -476,10 +481,12 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 		{
 			std::vector<float> data;
 			uint32_t Number = 0;
-			void updateSize(unsigned int nOccludee)
+			bool mObbQuery = false;
+			void updateSize(unsigned int nOccludee, int perUnitSize)
 			{
+				this->mObbQuery = perUnitSize > 6;
 				this->Number = nOccludee;
-				this->data.resize(nOccludee * 6);
+				this->data.resize(nOccludee * perUnitSize);
 			}
 
 		};
@@ -491,6 +498,7 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 			float ViewProj[16];
 
 			std::vector<OccluderData*>  Occluders;
+			std::vector<OccluderData*>  OccludeeMeshes;
 			std::vector<OccludeeBatch*> Occludees;
 			~CapturedFrameData()
 			{
@@ -503,8 +511,12 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 					OccludeeBatch* occ = Occludees[i];
 					delete occ;
 				}
+				for (int i = 0; i < OccludeeMeshes.size(); i++) {
+					delete OccludeeMeshes[i];
+				}
 
 				Occluders.clear();
+				OccludeeMeshes.clear();
 				Occludees.clear();
 			}
 
@@ -547,8 +559,7 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 			}
 			return false;
 		}
-
-		void loadBatchedOccludee(std::ifstream& fin, std::vector<OccludeeBatch*>& batches)
+		void loadBatchedOccludee(std::ifstream& fin, std::vector<OccludeeBatch*>& batches, int perUnitSize)
 		{
 			std::string line;
 			// get the number
@@ -558,10 +569,10 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 			unsigned int nOccludee = 0;
 			fin >> nOccludee;
 			std::getline(fin, line);
-			batch->updateSize(nOccludee);
+			batch->updateSize(nOccludee, perUnitSize);
 			float* arr = &batch->data[0];
 
-			for (unsigned int i_box = 0; i_box < nOccludee; ++i_box, arr += BBOX_STRIDE)
+			for (unsigned int i_box = 0; i_box < nOccludee; ++i_box, arr += perUnitSize)
 			{
 
 				fin >> arr[0] >> arr[1] >> arr[2];
@@ -570,8 +581,21 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 
 				fin >> arr[3] >> arr[4] >> arr[5];
 				std::getline(fin, line);
+
+				if (perUnitSize >= 12) {
+					fin >> arr[6] >> arr[7] >> arr[8];
+					std::getline(fin, line);
+					fin >> arr[9] >> arr[10] >> arr[11];
+					std::getline(fin, line);
+				}
+				if (perUnitSize >= 18) {
+					fin >> arr[12] >> arr[13] >> arr[14];
+					std::getline(fin, line);
+					fin >> arr[15] >> arr[16] >> arr[17];
+					std::getline(fin, line);
+				}
 			}
-			std::cout << "nOcc " << nOccludee << std::endl;
+			//std::cout << "nOcc " << nOccludee << std::endl;
 		}
 		SDOCLoader()
 		{
@@ -579,17 +603,19 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 		}
 
 
-		void loadCompactOccluder(std::ifstream& fin, std::vector<OccluderData*>& occluders)
+		void loadCompactOccluder(std::ifstream& fin, std::vector<OccluderData*>& occluders, std::vector<OccluderData*>& occludeeMeshes, bool occludee)
 		{
 			std::string line;
 			int n128;
 			fin >> n128;
 			std::getline(fin, line);
 
-			//std::cout << "compact line " << n128 << std::endl;
 			OccluderData *occ = new OccluderData(this->OccluderID++);
-			occluders.push_back(occ);
-			occ->CompactData = new short[n128 * 8];
+			if (occludee)
+				occludeeMeshes.push_back(occ);
+			else
+				occluders.push_back(occ);
+			occ->CompactData = new uint16_t[n128 * 8];
 			uint16_t* data = (uint16_t*)occ->CompactData;
 			for (int i_vert = 0; i_vert < n128; ++i_vert, data += 8)
 			{
@@ -602,12 +628,15 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 			loadMatrix(fin, occ->localToWorld);
 			return;
 		}
-		void loadOccluder(std::ifstream& fin, std::vector<OccluderData*>& occluders)
+		void loadOccluder(std::ifstream& fin, std::vector<OccluderData*>& occluders, std::vector<OccluderData*>& occludeeMeshes, bool occludee)
 		{
 			std::string line;
 			// load number of vertices and number of faces
 			OccluderData *occ = new OccluderData(this->OccluderID++);
-			occluders.push_back(occ);
+			if(occludee)
+				occludeeMeshes.push_back(occ);
+			else
+				occluders.push_back(occ);
 			int nVert, nFace;
 			fin >> nVert >> nFace;
 			occ->backfaceCull = nVert < 10000000;
@@ -635,7 +664,18 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 			for (int i_face = 0; i_face < nFace; ++i_face)
 			{
 				int i_face3 = i_face * 3;
-				fin >> Indices[i_face3 + 0] >> Indices[i_face3 + 1] >> Indices[i_face3 + 2];
+				if (false) {  
+					//use to debug a model could not build issue
+					//copy the model .off file and insert to a simple capture file
+					//search SaveSimplifyModel and set it to true to see the simplified model
+					int test = 0;
+					fin >> test >> Indices[i_face3 + 0] >> Indices[i_face3 + 1] >> Indices[i_face3 + 2];
+					assert(test == 3);
+				}
+				else {
+					fin >> Indices[i_face3 + 0] >> Indices[i_face3 + 1] >> Indices[i_face3 + 2];
+				}
+
 				std::getline(fin, line);
 			}
 			occ->Indices = Indices;
@@ -715,15 +755,19 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 
 				if (line.find("CompactOccluder") != std::string::npos)
 				{
-					loadCompactOccluder(fin, f.Occluders);
+					loadCompactOccluder(fin, f.Occluders, f.OccludeeMeshes, line.find("Query") != std::string::npos);
 				}
 				else if (line.find("Occluder") != std::string::npos)
 				{
-					loadOccluder(fin, f.Occluders);
+					loadOccluder(fin, f.Occluders, f.OccludeeMeshes, line.find("Query") != std::string::npos);
+				}
+				else if (line.find("Batched OccludeeOBB") != std::string::npos)
+				{
+					loadBatchedOccludee(fin, f.Occludees, nOcludeeOBBSize);
 				}
 				else if (line.find("Batched Occludee") != std::string::npos) 
 				{
-					loadBatchedOccludee(fin, f.Occludees);
+					loadBatchedOccludee(fin, f.Occludees, 6);
 				}
 			} while (fin.eof() == false);
 
@@ -738,7 +782,82 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 
 		CapturedFrameData* frame = nullptr;
 	};
+
+	static SDOCLoader::CapturedFrameData* CurrentDebugFrame = nullptr;
 	static bool saveCheckerBoardImage = true;
+
+	static int gTotalQueryNum = 0;
+	static int gVisibleNum = 0;
+	static SOCPrivate* Singleton = nullptr;
+	static std::mutex printLock;
+	static bool gCompressMode = false;
+	static void QueryOccludees()
+	{
+		SDOCLoader::CapturedFrameData* frame = CurrentDebugFrame;
+
+		int totalQueryNum = 0;
+		int visibleNum = 0;
+		for (int occIdx = 0; occIdx < frame->OccludeeMeshes.size(); occIdx++)
+		{
+			bool visible = false;
+			totalQueryNum++;
+			auto occ = frame->OccludeeMeshes[occIdx];
+			if ((gCompressMode == false) || (occ->CompactData == nullptr))
+			{
+				{
+					if (occ->Indices == nullptr) {
+						visible = Singleton->m_frameInfo->queryOccludeeMesh((float*)(occ->CompactData), nullptr, 0, 0, occ->localToWorld, true);
+					}
+					else {
+						visible = Singleton->m_frameInfo->queryOccludeeMesh(occ->Vertices, occ->Indices, occ->VerticesNum, occ->nIdx, occ->localToWorld, occ->backfaceCull);
+					}
+				}
+				bool visible2 = false;
+				if ( (occ->CompactData != nullptr)) {
+					visible2 = Singleton->m_frameInfo->queryOccludeeMesh((float*)(occ->CompactData), nullptr, 0, 0, occ->localToWorld, true);
+				}
+				if (visible2 == false && visible == true) {
+					std::cout << "*****************************ERROR in bake mode**********************************************************  " << occIdx<< std::endl;
+				}
+
+				if (visible2 == true && visible == false) {
+					std::cout << "*****************************BakeCanSee**********************************************************  " << occIdx<< std::endl;
+				}
+
+			}
+			else
+			{
+				visible = Singleton->m_frameInfo->queryOccludeeMesh((float*)(occ->CompactData), nullptr, 0, 0, occ->localToWorld, true);
+			}
+			if (visible == false) {
+				//std::cout << "idx " << occIdx << " " << visible << std::endl;
+			}
+			visibleNum += visible;
+		}
+
+		
+		for (int i = 0; i < frame->Occludees.size(); i++) {
+
+			auto& batch = frame->Occludees[i];
+
+			bool* allResults = new bool[batch->Number];
+			Singleton->batchQuery(&batch->data[0], batch->Number, allResults, batch->mObbQuery);
+
+			for (uint32_t idx = 0; idx < batch->Number; idx++)
+			{
+				visibleNum += (int)(allResults[idx] == true);
+				totalQueryNum++;
+				//if(allResults[idx] == false)
+				//	std::cout << "Idx " << idx<<" " << batch->Number << " visible FAIL " << visibleNum << std::endl;
+			}
+			delete[]allResults;
+		}
+		gVisibleNum = visibleNum;
+		gTotalQueryNum = totalQueryNum;
+		printLock.lock();
+		std::cout << "QUERY Result " << visibleNum << "/" << totalQueryNum <<"  ThreadID " << std::this_thread::get_id() << std::endl;
+		printLock.unlock();
+	}
     bool SOCPrivate::replay(const char *file_path, int config, int frameNum, uint64_t replaySetting, float * replayResult)
 	{
 		static SDOCLoader* loader = nullptr;
@@ -805,14 +924,14 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 		int allResultsLength = 1024;
 		bool * allResults = new bool[allResultsLength];
 
-
+		Singleton = this;
 
 		auto initStartTime = std::chrono::high_resolution_clock::now();
-		int visibleNum = 0;
-		int totalQueryNum = 0;
+
 		int totalOccluderNum = 0;
 
 		int compressMode = (replaySetting >> 8) & 1;
+		gCompressMode = compressMode;
 		int renderMode = (replaySetting >> 9) & 7;
 		this->setRenderType(renderMode);
 		
@@ -824,10 +943,12 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 		start = std::chrono::high_resolution_clock::now();
 
 		bool * occluderStates[2];
-		occluderStates[0] = new bool[loader->frame->Occluders.size() + 1];
-		memset(occluderStates[0], 0, sizeof(bool) * (loader->frame->Occluders.size() + 1));
-		occluderStates[1] = new bool[loader->frame->Occluders.size() + 1];
-		memset(occluderStates[1], 0, sizeof(bool) * (loader->frame->Occluders.size() + 1));
+		int extraOffSet = (int)loader->frame->OccludeeMeshes.size(); //add extraOffset as might treat occludeeMesh as Occluders for debug
+		int maxResultSize = (int)loader->frame->Occluders.size() + 1 + extraOffSet;
+		occluderStates[0] = new bool[maxResultSize];
+		memset(occluderStates[0], 0, sizeof(bool) * maxResultSize);
+		occluderStates[1] = new bool[maxResultSize];
+		memset(occluderStates[1], 0, sizeof(bool) * maxResultSize);
 
 		while (m_frameInfo->FrameCounter < ReplayMaxFrame)
         {
@@ -835,7 +956,8 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 			
 			SDOCLoader::CapturedFrameData* frame = loader->frame;
 			
-           
+			CurrentDebugFrame = frame;
+
 			// start new frame
 			float *c = frame->CameraDir;
 			if (c[0] == 0 && c[1] == 0 && c[2] == 0) 
@@ -873,7 +995,8 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 				totalOccluderNum = 0;
 				int drawIdx = 0;
 
-				for(int occIdx = 0; occIdx < frame->Occluders.size(); occIdx ++)
+				
+				for (int occIdx = 0; occIdx < frame->Occluders.size(); occIdx++)
 				{
 					//std::cout << "occIdx " << occIdx << "  size " << frame->Occluders.size() << std::endl;
 					auto occ = frame->Occluders[occIdx];
@@ -935,51 +1058,45 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 				m_rapidRasterizer->SyncOccluderPVS(occluderStates[m_frameInfo->FrameCounter & 1]);
 			}
 
-
 			
-           
-			if (totalQueryNum > allResultsLength)
-			{
-				delete[]allResults;
-				allResultsLength = 2 * totalQueryNum;
-				allResults = new bool[allResultsLength];
+
+
+			bool enableMtTest = false;
+			if (enableMtTest) {
+				thread t1(QueryOccludees);
+				thread t2(QueryOccludees);
+				thread t3(QueryOccludees);
+				thread t4(QueryOccludees);
+				thread t5(QueryOccludees);
+				thread t6(QueryOccludees);
+				thread t7(QueryOccludees);
+				thread t8(QueryOccludees);
+
+				// Wait for each thread to finish before continuing on.
+				t1.join();
+				t2.join();
+				t3.join();
+				t4.join();
+				t5.join();
+				t6.join();
+				t7.join();
+				t8.join();
 			}
-
-
-			totalQueryNum = 0;
-			visibleNum = 0;
-
-			for (auto &batch : frame->Occludees) {
-
-				totalQueryNum += batch->Number;
-				if (totalQueryNum > allResultsLength)
-				{
-					delete[]allResults;
-					allResultsLength = 2 * totalQueryNum;
-					allResults = new bool[allResultsLength];
-				}
-				batchQuery(&batch->data[0], batch->Number, allResults);
-
-				for (int idx = 0; idx < totalQueryNum; idx++)
-				{
-					visibleNum += (int)(allResults[idx] == true);
-					//std::cout << "Idx " << idx << " visible " << visibleNum << std::endl;
-				}
+			else {
+				QueryOccludees();
 			}
-
-
 		
 
 				
-			replayResult[1] = (float) visibleNum;
-			replayResult[2] = (float) totalQueryNum;
+			replayResult[1] = (float)gVisibleNum;
+			replayResult[2] = (float)gTotalQueryNum;
 
 			
 			if (printResult)
 			{
-				LOGI("QueryResult: VisibleNum %d", visibleNum);
+				LOGI("QueryResult: VisibleNum %d", gVisibleNum);
 				int i = 0;
-				for (; i + 4 <= totalQueryNum; i += 4)
+				for (; i + 4 <= gTotalQueryNum; i += 4)
 				{
 					int r1 = allResults[i];
 					int r2 = allResults[i + 1];
@@ -989,7 +1106,7 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 
 					std::cout << std::hex << result;
 				}
-				for (; i < totalQueryNum; i++)
+				for (; i < gTotalQueryNum; i++)
 				{
 					auto v = allResults[i];
 					if (v) LOGI( "1");
@@ -1040,7 +1157,7 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 
 		std::cout << "time " << time << std::endl;
 
-		LOGI("Last Frame Query Result: VisibleNum  %d totalQueryNum %d TotalOccluderNum %d", visibleNum, totalQueryNum, totalOccluderNum);
+		LOGI("Last Frame Query Result: VisibleNum  %d totalQueryNum %d TotalOccluderNum %d", gVisibleNum, gTotalQueryNum, totalOccluderNum);
 		//token file_path to get the capture name
 		std::string inputFile = std::string( file_path);
 
@@ -1074,10 +1191,15 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 
 
 		{
-			doDumpDepthMap(image, common::DumpImageMode::DumpFull);
-			//clean up the memory related...
-			std::string result = inputFile.substr(0, inputFile.length()-4) + "_" + std::to_string(config)+"_r"+ std::to_string(roundNum)+ ".ppm";
+			doDumpDepthMap(image, common::DumpImageMode::DumpFullMax);
+			std::string result = inputFile.substr(0, inputFile.length()-4) + "_" + std::to_string(config)+"_r"+ std::to_string(roundNum)+ "Max.ppm";
 			dumpOccluderOccludeeColorImage(result, image, width, height);
+
+
+			doDumpDepthMap(image, common::DumpImageMode::DumpFullMin);
+			 result = inputFile.substr(0, inputFile.length() - 4) + "_" + std::to_string(config) + "_r" + std::to_string(roundNum) + "Min.ppm";
+			dumpOccluderOccludeeColorImage(result, image, width, height);
+
 			LOGI("save %s", result.c_str());
 
 			if (saveCheckerBoardImage) {

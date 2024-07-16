@@ -9,15 +9,26 @@
 **
 ** Code from https://github.com/rawrunprotected/rasterizer/blob/master/SoftwareRasterizer/Rasterizer.cpp under CC0 1.0 Universal (CC0 1.0) Public Domain Dedication.
 */
+#if defined(SDOC_NATIVE)
+#define PLATFORM_WINDOWS 1
+#endif
+#if defined(SDOC_IOS)
+#define PLATFORM_IOS 1
+#endif
+#if defined(SDOC_ANDROID)
+#define PLATFORM_ANDROID_ARM64 1
+#endif
 
+
+#if PLATFORM_WINDOWS || PLATFORM_ANDROID_ARM64 || PLATFORM_IOS
 #include "Rasterizer.h"
 
 #include <algorithm>
 #include <cassert>
 #include <cmath>
 
-#include "Common/MemUtil.h"
-#include "Common/SOCUtil.h"
+#include "../../../Common/MemUtil.h"
+#include "../../../Common/SOCUtil.h"
 
 
 #include <chrono>
@@ -39,8 +50,20 @@ using namespace common;
 #define SDOC_ARM
 #endif
 
+//****************************************************************************************************************************************
+//Debug tips
+//1. set SaveSimplifyModel to check the input model
+//2. set bForceMeshLineDebug to true to check the meshline, set MeshLineScale to a smaller value if wish to check meshline outside viewport
+//3. off backface culling: set bDebugForceBackfaceCullingOFF to true
+//4. enable bDebugVerySmallOccluders to relax mask constraints for small occluders
+//****************************************************************************************************************************************
 namespace util
 {
+	static constexpr bool bEnableOccludeeOBBQuery = false; //if wish to use OBB query, set this to true
+
+	static constexpr bool bDebugForceBackfaceCullingOFF = false; //SET true to disable BFC to debug!!
+
+
 	enum RenderType {
 		Mesh = 0,
 		MeshLine = 1,
@@ -57,14 +80,19 @@ namespace util
 #else
 	static constexpr bool ARMV7 = false;
 #endif
-
 	
+	static constexpr bool bDebug_ValidateMinMaxBlockIdx = false;
+
 	////if occludee clipped with near plane, do the frustum culling check
 	////otherwise, latest using quad could achieve frustum culling
 	static constexpr bool bFrustumCullIfClip = true; 
 
 
-	static constexpr bool bDepthAtCenterOptimization = false; //save one _mm_sub_ps for X, turn on would introduce vertical 1 pixel error!
+	static constexpr bool bSplitQuadToTriangleForOccludee = true;
+	static constexpr float ExtremeSmallPrimitiveAreaTh = 2.0/64.0f; //Primitive that cover less than 2 pixel area
+	static constexpr bool bDebugVerySmallOccluders = false;
+
+	
 
 	//Use branch to fast check whether occluder local to world transform having scales..
 	static constexpr bool bFastSetUpMatOp = true;
@@ -77,6 +105,13 @@ namespace util
 	static constexpr bool bConvexOptimization = true;
 
 
+	static constexpr bool bDrawOccludeeToDepthMap = false;
+	static constexpr bool bForceMeshLineDebug = false;
+	static constexpr float MeshLineScale = 1.0f;
+	
+
+	static constexpr int nOcludeeOBBSize = 18;   //Debug: change to 12 if input only 4 points, otherwise 18
+
 	static constexpr bool bOccludeeBitScanOp = 1;
 	static constexpr uint16_t bOccludeeMinDepthThreshold = 150 << 8; //depth 9360
 
@@ -85,9 +120,11 @@ namespace util
 	static constexpr bool bDumpTriangle = false;
 #endif 
 
-	static constexpr bool bPixelAABBClipping = true;
+	static constexpr bool bPixelAABBClipping = true;  //developer todo: set this to false to improve performance. it is used to handle degenerated hair which should not affect correctness
 	
 
+	static constexpr bool bTestObbByAABB = false; //enable this to print
+	static constexpr bool bTestQUADByAABB = false; //enable this to print
 
 	static constexpr int DEBUG_DATA_SIZE = 256; //used to store all the counters
 	static constexpr bool PrintOccludeeState = false;
@@ -104,16 +141,11 @@ namespace util
 	static constexpr uint16_t MIN_UPDATED_BLOCK_DEPTH = 1;
 	static constexpr uint16_t MIN_UPDATED_BLOCK_DEPTH2 = 2;
 #if defined(SDOC_ANDROID) && !defined(__aarch64__)
-	static constexpr float MIN_PIXEL_DEPTH_FLOAT = 1.17549435082e-38; // ARMV7 minimal positive non denormalized number 
-	static constexpr int MIN_PIXEL_DEPTH_FLOAT_INT = 0x00400000; // ARMV7 minimal positive non denormalized number 
+	static constexpr float MIN_PIXEL_DEPTH_FLOAT = 1.17549435082e-38; // ARMV7 minimal positive non denormalized number
 #else 
 	static constexpr float MIN_PIXEL_DEPTH_FLOAT = 3.44383110592e-41; // the float value of  0x00006000;
-	static constexpr int MIN_PIXEL_DEPTH_FLOAT_INT = 0x00006000; // the float value of  0x00006000;
 #endif
 
-	//static constexpr float MIN_PIXEL_DEPTH_FLOAT = 3.85374067974e-34;
-	//static constexpr int MIN_PIXEL_DEPTH_FLOAT_INT = 0x08001000;
-	static constexpr bool SupportDepthTill65K = false;  //65k depth is working as expected now, however no obvious benefit
 
 	static constexpr int PureCheckerBoardApproach = 8;
 	static constexpr int CheckerBoardVizMaskApproach = 9; //2 x 4.5 _m128i
@@ -121,9 +153,13 @@ namespace util
 	static constexpr int PairBlockNum = 9; //change to 16 for full block approach
 	static constexpr bool VRS_X4Y4_Optimzation = true;
  
-	static constexpr bool OCCLUDEE_NEARCLIP_BBOX_CHECK_IGNORE_OPTIMIZATION = true;
+	static constexpr bool OCCLUDEE_NEARCLIP_BBOX_CHECK_IGNORE_OPTIMIZATION = false;
 	
 	
+
+	static constexpr bool Rasterize_ClippedOccludee_AS_OCCLUDER_AABB = false;
+	static constexpr bool Rasterize_ClippedOccludee_AS_OCCLUDER_OBB = true;
+	static constexpr bool Rasterize_ClippedOccludee_AS_OCCLUDER = Rasterize_ClippedOccludee_AS_OCCLUDER_AABB || Rasterize_ClippedOccludee_AS_OCCLUDER_OBB;
 
 	static constexpr bool NEAR_CLIP_SURE_VISIBLE_OPTIMIZATION = true;
 	static constexpr int MAX_DEPTH = 0xFFFF;
@@ -171,7 +207,28 @@ static constexpr int SLOPE_QUANTIZATION_FACTOR = 1 << SLOPE_QUANTIZATION_BITS;
 
 Rasterizer::Rasterizer()
 {
+	mCameraPos[3] = 1.0;
+	mAABBUnitArray = new __m128[17];
+	const float scale = 1.0f;
+	mAABBUnitArray[0] = _mm_setr_ps(0, scale, scale, 0);
+	mAABBUnitArray[1] = _mm_setr_ps(scale, scale, 0, 0);
+	mAABBUnitArray[2] = _mm_setr_ps(0, scale, scale, 0);
+	mAABBUnitArray[3] = _mm_setr_ps(0, 0, scale, scale);
+	mAABBUnitArray[4] = _mm_setr_ps(0, scale, scale, 0);
+	mAABBUnitArray[5] = _mm_setr_ps(0, scale, scale, 0);
+	mAABBUnitArray[6] = _mm_setr_ps(0, 0, scale, scale);
+	mAABBUnitArray[7] = _mm_setr_ps(scale, scale, scale, scale);
+	mAABBUnitArray[8] = _mm_setr_ps(0, 0, 0, 0);
+	
 
+	mAABBUnitArray[9] = _mm_setr_ps(scale, scale, 0, 0);
+	mAABBUnitArray[10] = _mm_setr_ps(0, 0, 0, 0);
+	mAABBUnitArray[11] = _mm_setr_ps(scale, 0, 0, 0);
+	mAABBUnitArray[12] = _mm_setr_ps(scale, 0, 0, 0);
+	mAABBUnitArray[13] = _mm_setr_ps(0, scale, 0, 0);
+	mAABBUnitArray[14] = _mm_setr_ps(0, scale, 0, 0);
+	mAABBUnitArray[15] = _mm_setr_ps(scale, 0, scale, scale);
+	mAABBUnitArray[16] = _mm_setr_ps(scale, 0, scale, scale);
 
 	mAliveIdxMask[0] = 0;
 	mAliveIdxMask[1] = 0; //0001                                   0
@@ -192,20 +249,9 @@ Rasterizer::Rasterizer()
 	mAliveIdxMask[15] = (3 << 6) | (2 << 4) | (1 << 2); //1111   228
 
 	
-	if (bDepthAtCenterOptimization == false) 
-	{
-		xFactors[0] = _mm_setr_ps(0.375f, 0.875f, 0.375f, 0.875f);
-		xFactors[1] = _mm_setr_ps(0, .5f, 00, 0.5f);
-	}
-	else 
-	{
-		float one16 = 1.0f / 16;
-		xFactors[0] = _mm_setr_ps(0.375f + one16, 0.875f + one16, 0.375f + one16, 0.875f + one16);
-		xFactors[1] = _mm_setr_ps(0 + one16, .5f + one16, 00 + one16, 0.5f + one16);
-	}
-
+	xFactors[0] = _mm_setr_ps(0.375f, 0.875f, 0.375f, 0.875f);
+	xFactors[1] = _mm_setr_ps(0, .5f, 0, 0.5f);
 	
-	mPrimitiveBoundaryClip = new PrimitiveBoundaryClipCache();
 
 
 	if (DebugOccluderOccludee)
@@ -259,15 +305,12 @@ static __m128i packDepthPremultiplied(__m128 depthAf, __m128 depthBf, __m128i ma
 }
 #endif
 
+inline static bool _mm_anybit_one_soc(__m128i depthA) {
+	uint64_t* data = (uint64_t*)&depthA;
+	return (data[0] | data[1]) != 0;
+}
 inline static __m128i packQueryDepth(__m128 depthA)
 {
-	if (SupportDepthTill65K) {
-		__m128i d0 = _mm_castps_si128(depthA);
-		__m128i d1 = _mm_slli_epi32(d0, 5);
-		return _mm_srli_epi32(d1, 16);
-		//return _mm_min_epi32(depthAi, _mm_set1_epi32(0xFFFF));
-	}
-
 	__m128i depthAi = _mm_srli_epi32(_mm_castps_si128(depthA), 12);
 	return _mm_min_epi32(depthAi, _mm_set1_epi32(0xFFFF));
 }
@@ -275,54 +318,28 @@ inline static __m128i packQueryDepth(__m128 depthA)
 
 inline static __m128i packDepthPremultipliedVRS12Fast(__m128i depthA)
 {
-	if (SupportDepthTill65K) {
-		__m128i d160 = _mm_slli_epi32(depthA, 5);
-		__m128i d16 = _mm_srli_epi32(d160, 16);
-		__m128i d162 = _mm_slli_epi32(d16, 16);
-		return _mm_or_si128(d16, d162);
-	}
-
 	__m128i d16 = _mm_srli_epi32(depthA, 12);
 	__m128i d162 = _mm_slli_epi32(d16, 16);
 	return _mm_or_si128(d16, d162);
 }
 
 
-inline static __m128i PackPositiveBatchZ(__m128 maxZ) 
-{
-	if (SupportDepthTill65K) 
-	{
-		__m128i maxZi = _mm_srai_epi32(_mm_castps_si128(maxZ), 11);
-		return _mm_min_epu32(maxZi, _mm_set1_epi32(65535));
+//inline static __m128i PackPositiveBatchZ(__m128 maxZ) 
+//{
+//	__m128i maxZi = _mm_srai_epi32(_mm_castps_si128(maxZ), 12);
+//	return _mm_min_epu32(maxZi, _mm_set1_epi32(65535));
+//}
 
-
-	}
-	else {
-		__m128i maxZi = _mm_srai_epi32(_mm_castps_si128(maxZ), 12);
-		return _mm_min_epu32(maxZi, _mm_set1_epi32(65535));
-	}
-}
-
-static std::mutex g_i_mutex;
-static uint64_t * MaskTableCache = nullptr;
 
 
 Rasterizer::~Rasterizer()
 {
+	delete[]mAABBUnitArray;
+	delete mOccluderCache;
+	mOccluderCache = nullptr;
+	delete mPixelBound;
+	mPixelBound = nullptr;	
 
-	if (mPrimitiveBoundaryClip != nullptr)
-	{
-		delete mPrimitiveBoundaryClip;
-	}
-	
-	const std::lock_guard<std::mutex> lock(g_i_mutex);
-	if (MaskTableCache != nullptr && m_precomputedRasterTables.size() > 0) 
-	{
-		if (MaskTableCache == &m_precomputedRasterTables[0]) {
-			MaskTableCache = nullptr;
-			//LOGI("Clear Mask Cache");
-		}
-	}
 }
 void Rasterizer::setResolution(unsigned int width, unsigned int height)
 {
@@ -339,6 +356,7 @@ void Rasterizer::setResolution(unsigned int width, unsigned int height)
     m_blocksX = width >> 3;
 	m_blocksY = height >> 3;
 	m_blocksYMinusOne = m_blocksY - 1;
+	m_blocksXMinusOne = m_blocksX - 1;
 
 	if(bOccludeeBitScanOp)
 		mAnyDataBlockMask.resize(m_blocksY);
@@ -352,8 +370,7 @@ void Rasterizer::setResolution(unsigned int width, unsigned int height)
 
 
 
-	m_depthBuffer.reserve(m_blocksY * m_blocksXFullDataRows / 2);
-	m_depthBuffer.resize(1);
+	m_depthBuffer.resize(m_blocksY * m_blocksXFullDataRows / 2);
 	m_pDepthBuffer =(uint64_t*) &m_depthBuffer[0];
 
 	this->m_blockSize = m_blocksX * m_blocksY;
@@ -372,18 +389,7 @@ void Rasterizer::setResolution(unsigned int width, unsigned int height)
 	if (m_precomputedRasterTables.size() == 0)
 	{
 		m_precomputedRasterTables.resize(totalMaskTable, 0);
-
-		std::lock_guard<std::mutex> lock(g_i_mutex);
-		if (MaskTableCache != nullptr)
-		{
-			//LOGI("Clone Exist Mask Table Cache");
-			memcpy(&m_precomputedRasterTables[0], MaskTableCache, 64 * 64 * sizeof(uint64_t));
-		}
-		else
-		{
-			precomputeRasterizationTable();
-			MaskTableCache = &m_precomputedRasterTables[0];
-		}
+		precomputeRasterizationTable();
 	}
 	else 
 	{
@@ -407,38 +413,14 @@ void Rasterizer::setResolution(unsigned int width, unsigned int height)
 
 	m_MaxCoordOccludee_WHWH = _mm_setr_epi32(m_width - 1, m_height - 1, m_width - 1, m_height - 1);
 }
-void Rasterizer::UpdateFrustumCullPlane() 
-{
-	if (bFrustumCullIfClip)
-	{
-		const __m128 mat0 = pLocalToClipRow[0];
-		const __m128 mat1 = pLocalToClipRow[1];
-		const __m128 mat2 = pLocalToClipRow[2];
-		const __m128 mat3 = pLocalToClipRow[3];
-		////////Refer to http://www.lighthouse3d.com/tutorials/view-frustum-culling/clip-space-approach-extracting-the-planes/
-		////////Left Plane : x' = -1
-		////////Right Plane : x' = 1
-		////////Top Plane : y' = 1
-		////////Bottom Plane : y' = -1
-		////////Near Plane : z' = -1
-		////////Far Plane : z' = 1
-		////// Store rows
-		m_FrustumPlane[0] = _mm_add_ps(mat3, mat0);	//left
-		m_FrustumPlane[1] = _mm_sub_ps(mat3, mat0);	//right
-		m_FrustumPlane[2] = _mm_add_ps(mat3, mat1);	//bottom
-		m_FrustumPlane[3] = _mm_sub_ps(mat3, mat1);	//up
-		m_FrustumPlane[4] = _mm_add_ps(mat3, mat2);	//near
-		m_FrustumPlane[5] = _mm_sub_ps(mat3, mat2);	//far
-	}
-}
-void Rasterizer::setModelViewProjectionT(const common::Matrix4x4 &localToClip)
-{
-	pLocalToClipRow = localToClip.Row;
 
-    __m128 mat0 = localToClip.Row[0];
-    __m128 mat1 = localToClip.Row[1];
-    __m128 mat2 = localToClip.Row[2];
-    __m128 mat3 = localToClip.Row[3];
+void Rasterizer::setModelViewProjectionT(const common::Matrix4x4 &input, bool simpleOccludee, OccluderRenderCache* occ)
+{
+
+    __m128 mat0 = input.Row[0];
+    __m128 mat1 = input.Row[1];
+    __m128 mat2 = input.Row[2];
+    __m128 mat3 = input.Row[3];
 
 	
 
@@ -446,30 +428,46 @@ void Rasterizer::setModelViewProjectionT(const common::Matrix4x4 &localToClip)
 	__m128 plane2 = _mm_add_ps(mat3, mat1);
 	__m128 plane5 = _mm_sub_ps(mat3, mat2);
 
+
+	__m128* localToClip ;
+	if (simpleOccludee) {
+		localToClip = m_OccludeelocalToClip;
+	}
+	else {
+		localToClip = occ->m_localToClipData;
+		occ->m_localToClipPointer = localToClip;
+	}
+	__m128* FrustumPlane = localToClip + 4;
+
+	////////Refer to http://www.lighthouse3d.com/tutorials/view-frustum-culling/clip-space-approach-extracting-the-planes/
+	////////Left Plane : x' = -1
+	////////Right Plane : x' = 1
+	////////Top Plane : y' = 1
+	////////Bottom Plane : y' = -1
+	////////Near Plane : z' = -1
+	////////Far Plane : z' = 1
+	////// Store rows
+	FrustumPlane[0] = plane0;// _mm_add_ps(mat3, mat0);	//left
+	FrustumPlane[1] = _mm_sub_ps(mat3, mat0);	//right
+	FrustumPlane[2] = plane2;// _mm_add_ps(mat3, mat1);	//bottom
+	FrustumPlane[3] = _mm_sub_ps(mat3, mat1);	//up
+	FrustumPlane[4] = _mm_add_ps(mat3, mat2);	//near
+	FrustumPlane[5] = plane5;// _mm_sub_ps(mat3, mat2);	//far
+
 	// Bake viewport transform into matrix
-	m_localToClip[0] = _mm_mul_ps_scalar_soc(plane0, static_cast<float>(m_width >> 1));  //m_width must be multiple of 16
-	m_localToClip[1] = _mm_mul_ps_scalar_soc(plane2, static_cast<float>(m_height >> 1));  //m_height must be multiple of 8
+	localToClip[0] = _mm_mul_ps_scalar_soc(plane0, static_cast<float>(m_width >> 1));  //m_width must be multiple of 16
+	localToClip[1] = _mm_mul_ps_scalar_soc(plane2, static_cast<float>(m_height >> 1));  //m_height must be multiple of 8
 
 	// Map depth from [-1, 1] to [bias, 0]
-	m_localToClip[2] = _mm_mul_ps_scalar_soc(plane5, 0.5f * floatCompressionBias);
+	localToClip[2] = _mm_mul_ps_scalar_soc(plane5, 0.5f * floatCompressionBias);
 
-	m_localToClip[3] = mat3;
+	localToClip[3] = mat3;
 
 	
 	
 
-
-
-	_MM_TRANSPOSE4_PS(m_localToClip[0], m_localToClip[1],
-					  m_localToClip[2], m_localToClip[3]);
-
-    ////_MM_TRANSPOSE4_PS(mat0, mat1, mat2, mat3);
-
-    ////// Store prebaked cols
-    ////m_localToClip->LocalToClip.Row[0] = mat0;
-    ////m_localToClip->LocalToClip.Row[1] = mat1;
-    ////m_localToClip->LocalToClip.Row[2] = mat2;
-    ////m_localToClip->LocalToClip.Row[3] = mat3;
+	_MM_TRANSPOSE4_PS(localToClip[0], localToClip[1],
+		localToClip[2], localToClip[3]);
 }
 
 
@@ -513,9 +511,16 @@ static inline void ZeroHizUpdateBlocks(uint16_t * pHiz, uint32_t m_blocksX, uint
 
 void Rasterizer::configBeforeRasterization()
 {
-	
+	if(bDrawOccludeeToDepthMap){
+		mDebugRenderMode = true;
+		//mDebugRenderType = MeshLine;
+	}
+	if (bForceMeshLineDebug) {
+		mDebugRenderMode = true;  
+		mDebugRenderType = MeshLine;
+	}
 	mBlockWidthMin = 0;
-	mBlockWidthMax = m_blocksX - 1;
+	mBlockWidthMax = m_blocksXMinusOne;
 	if(mInterleave.CurrentFrameInterleaveDrawing == false)
 	{
 		m_MaxCoord_WHWHOccluder = m_MaxCoord_WHWH;
@@ -644,10 +649,7 @@ static void RecoverPartialBlockData(__m128i*TargetBlockData,  __m128i * depthRow
 		{
 			//LOGI("Find zero min data block. SET to white");
 			//minValue = 255 << 8;
-			if (SupportDepthTill65K)
-				minValue = 52 << 9;
-			else 
-				minValue = 180 << 8;
+			minValue = 25 ;
 		}
 		__m128i defaultV = _mm_set1_epi16(minValue);
 		for (int i = 0; i < 4; i++) 
@@ -671,13 +673,7 @@ static void RecoverPartialBlockData(__m128i*TargetBlockData,  __m128i * depthRow
 
 			 TargetBlockData[(i << 1)  ] = _mm_or_si128(r, a0b);
 		}
-		if (SupportDepthTill65K) 
-		{
-			for (int i = 0; i < 8; i++) {
-				TargetBlockData[i] = _mm_srli_epi32(TargetBlockData[i], 1);
-				TargetBlockData[i] = _mm_or_si128(TargetBlockData[i], _mm_set1_epi32(0x80008000));
-			}
-		}
+		
 		if (bDumpCheckerboardImage) 
 		{
 			GrayCheckBoardWhitePixel(TargetBlockData);
@@ -713,6 +709,7 @@ static void RecoverPartialBlockData(__m128i*TargetBlockData,  __m128i * depthRow
 
 void Rasterizer::onOccluderRenderFinish()
 {
+
 	//time to expand the depth map horizontally to cull more pixels
 
 
@@ -796,11 +793,11 @@ void Rasterizer::onOccluderRenderFinish()
 		auto Time2 = std::chrono::high_resolution_clock::now();
 
 
-		bool verify = 0;
+		bool verify = false;
 		if (verify) {
-			int maxXStep = m_width >> 3;
+			maxXStep = m_width >> 3;
 			uint16_t* hizBuffer = m_pHiz;
-			uint32_t y = 0;
+			y = 0;
 
 
 			do
@@ -855,8 +852,123 @@ static inline int OnParentNodeQuery(unsigned int i_mesh, bool * results, uint16_
 }
 
 template <bool bHasTreeData, bool OccludeeWidth1024>
-void Rasterizer::batchQueryWithTree(const float * bbox, unsigned int nMesh, bool * results) {
+void Rasterizer::batchQueryWithTree(const float * bbox, unsigned int nMesh, bool * results, bool obbMode) {
 	const float *min = bbox;
+	if (obbMode && bEnableOccludeeOBBQuery) {
+		int perOccludeeStride = nOcludeeOBBSize; 
+		if (mOccludeeTrueAsCulled == false) {
+			if (ShowOccludeeInDepthMap == false)
+			{
+				for (unsigned int i_mesh = 0; i_mesh < nMesh; ++i_mesh, min += perOccludeeStride)
+				{
+					if (DebugOccluderOccludee)
+					{
+						DebugData[CurrentOccludeeIdx] = i_mesh;
+					}
+					results[i_mesh] = queryVisibility_OBB<0, OccludeeWidth1024, false>(min);
+					if (bHasTreeData)
+					{
+						int skipNum = OnParentNodeQuery(i_mesh, results, this->mOccludeeTreeData);
+						i_mesh += skipNum;
+						min += skipNum * perOccludeeStride;
+					}
+				}
+			}
+			else {
+				for (unsigned int i_mesh = 0; i_mesh < nMesh; ++i_mesh, min += perOccludeeStride)
+				{
+					if (DebugOccluderOccludee)
+					{
+						DebugData[CurrentOccludeeIdx] = i_mesh;
+					}
+
+					results[i_mesh] = queryVisibility_OBB<0, OccludeeWidth1024, false>(min);
+
+					if (bHasTreeData)
+					{
+						int skipNum = OnParentNodeQuery(i_mesh, results, this->mOccludeeTreeData);
+						i_mesh += skipNum;
+						min += skipNum * perOccludeeStride;
+					}
+
+					if (mCurrentOccludee != -1)
+					{
+						mOccludeeResults.push_back(mCurrentOccludee);
+						mCurrentOccludeeDepth >>= 8;
+
+						mOccludeeResults.push_back(((uint64_t)mCurrentOccludeeDepth << 48) | (uint64_t)results[i_mesh]);
+						mCurrentOccludee = -1;
+					}
+				}
+			}
+
+
+
+		}
+		else {
+
+			if (ShowOccludeeInDepthMap == false)
+			{
+				for (unsigned int i_mesh = 0; i_mesh < nMesh; ++i_mesh, min += perOccludeeStride)
+				{
+					if (DebugOccluderOccludee)
+					{
+						DebugData[CurrentOccludeeIdx] = i_mesh;
+					}
+					if (results[i_mesh] == false)
+					{
+						results[i_mesh] = queryVisibility_OBB<0, OccludeeWidth1024, false>(min);
+					}
+					else
+					{
+						results[i_mesh] = false;
+					}
+
+					if (bHasTreeData)
+					{
+						int skipNum = OnParentNodeQuery(i_mesh, results, this->mOccludeeTreeData);
+						i_mesh += skipNum;
+						min += skipNum * perOccludeeStride;
+					}
+				}
+			}
+			else {
+				for (unsigned int i_mesh = 0; i_mesh < nMesh; ++i_mesh, min += perOccludeeStride)
+				{
+					if (DebugOccluderOccludee)
+					{
+						DebugData[CurrentOccludeeIdx] = i_mesh;
+					}
+
+					if (results[i_mesh] == false)
+					{
+						results[i_mesh] = queryVisibility_OBB<0, OccludeeWidth1024, false>(min);
+						if (bHasTreeData)
+						{
+							int skipNum = OnParentNodeQuery(i_mesh, results, this->mOccludeeTreeData);
+							i_mesh += skipNum;
+							min += skipNum * perOccludeeStride;
+						}
+
+
+						if (mCurrentOccludee != -1)
+						{
+							mOccludeeResults.push_back(mCurrentOccludee);
+							mCurrentOccludeeDepth >>= 8;
+
+							mOccludeeResults.push_back(((uint64_t)mCurrentOccludeeDepth << 48) | (uint64_t)results[i_mesh]);
+							mCurrentOccludee = -1;
+						}
+					}
+					else
+					{
+						results[i_mesh] = false;
+					}
+				}
+			}
+		}
+		return;
+	}
 	if (mOccludeeTrueAsCulled == false) {
 		if (ShowOccludeeInDepthMap == false)
 		{			
@@ -866,7 +978,7 @@ void Rasterizer::batchQueryWithTree(const float * bbox, unsigned int nMesh, bool
 					{
 						DebugData[CurrentOccludeeIdx] = i_mesh;
 					}
-					results[i_mesh] = queryVisibility<0, OccludeeWidth1024, false>(min);
+					results[i_mesh] = queryVisibility<0, OccludeeWidth1024, false>(min, nullptr);
 					if (bHasTreeData)
 					{
 						int skipNum = OnParentNodeQuery(i_mesh, results, this->mOccludeeTreeData);
@@ -883,7 +995,7 @@ void Rasterizer::batchQueryWithTree(const float * bbox, unsigned int nMesh, bool
 					DebugData[CurrentOccludeeIdx] = i_mesh;
 				}
 				
-				results[i_mesh] = queryVisibility<0, OccludeeWidth1024, false>(min);
+				results[i_mesh] = queryVisibility<0, OccludeeWidth1024, false>(min, nullptr);
 				
 				if (bHasTreeData)
 				{
@@ -895,15 +1007,8 @@ void Rasterizer::batchQueryWithTree(const float * bbox, unsigned int nMesh, bool
 				if (mCurrentOccludee != -1)
 				{
 					mOccludeeResults.push_back(mCurrentOccludee);
-					if (SupportDepthTill65K)
-					{
-						mCurrentOccludeeDepth >>= 9;
-						mCurrentOccludeeDepth |= 128;
-					}
-					else
-					{
-						mCurrentOccludeeDepth >>= 8;
-					}
+					
+					mCurrentOccludeeDepth >>= 8;
 
 					mOccludeeResults.push_back(((uint64_t)mCurrentOccludeeDepth << 48) | (uint64_t)results[i_mesh]);
 					mCurrentOccludee = -1;
@@ -926,7 +1031,7 @@ void Rasterizer::batchQueryWithTree(const float * bbox, unsigned int nMesh, bool
 					}
 					if (results[i_mesh] == false)
 					{
-						results[i_mesh] = queryVisibility<0, OccludeeWidth1024, false>(min);
+						results[i_mesh] = queryVisibility<0, OccludeeWidth1024, false>(min, nullptr);
 					}
 					else
 					{
@@ -951,7 +1056,7 @@ void Rasterizer::batchQueryWithTree(const float * bbox, unsigned int nMesh, bool
 
 				if (results[i_mesh] == false)
 				{
-					results[i_mesh] = queryVisibility<0, OccludeeWidth1024, false>(min);
+					results[i_mesh] = queryVisibility<0, OccludeeWidth1024, false>(min, nullptr);
 					if (bHasTreeData)
 					{
 						int skipNum = OnParentNodeQuery(i_mesh, results, this->mOccludeeTreeData);
@@ -963,15 +1068,8 @@ void Rasterizer::batchQueryWithTree(const float * bbox, unsigned int nMesh, bool
 					if (mCurrentOccludee != -1)
 					{
 						mOccludeeResults.push_back(mCurrentOccludee);
-						if (SupportDepthTill65K)
-						{
-							mCurrentOccludeeDepth >>= 9;
-							mCurrentOccludeeDepth |= 128;
-						}
-						else
-						{
-							mCurrentOccludeeDepth >>= 8;
-						}
+						
+						mCurrentOccludeeDepth >>= 8;
 
 						mOccludeeResults.push_back(((uint64_t)mCurrentOccludeeDepth << 48) | (uint64_t)results[i_mesh]);
 						mCurrentOccludee = -1;
@@ -986,7 +1084,7 @@ void Rasterizer::batchQueryWithTree(const float * bbox, unsigned int nMesh, bool
 	}
 }
 template <bool OccludeeWidth1024>
-void Rasterizer::batchQuery(const float * bbox, unsigned int nMesh, bool * results) 
+void Rasterizer::batchQuery(const float * bbox, unsigned int nMesh, bool * results, bool obbMode)
 {
 	if (bDebugOccluderOnly) 
 	{
@@ -995,11 +1093,11 @@ void Rasterizer::batchQuery(const float * bbox, unsigned int nMesh, bool * resul
 	}
 
 	if (this->mOccludeeTreeData == nullptr) {
-		batchQueryWithTree<false, OccludeeWidth1024>(bbox, nMesh, results);
+		batchQueryWithTree<false, OccludeeWidth1024>(bbox, nMesh, results, obbMode);
 	}
 	else 
 	{
-		batchQueryWithTree<true, OccludeeWidth1024>(bbox, nMesh, results);
+		batchQueryWithTree<true, OccludeeWidth1024>(bbox, nMesh, results, obbMode);
 		mOccludeeTreeData = nullptr;
 	}
 
@@ -1257,14 +1355,12 @@ size_t Rasterizer::getMemoryUsage() const
 	return memory;
 }
 
-bool Rasterizer::inFrustum(__m128& boundsMin, __m128& boundsMax, __m128& extents)
+bool Rasterizer::inFrustum(__m128& center, __m128& extents, __m128* FrustumPlane)
 {
 	if (bFrustumCullIfClip == false) return true;
 	// Bounding box center times 2 - but since W = 2, the plane equations work out correctly
-	__m128 center = _mm_add_ps(boundsMax, boundsMin);
 
 	__m128 minusZero = _mm_set1_ps(-0.0f);
-	__m128 *FrustumPlane = this->m_FrustumPlane ;
 
 	// Compute distance from each frustum plane
 	__m128 offset0 = _mm_add_ps(center, _mm_xor_ps(extents, _mm_and_ps(FrustumPlane[0], minusZero)));
@@ -1289,9 +1385,557 @@ bool Rasterizer::inFrustum(__m128& boundsMin, __m128& boundsMax, __m128& extents
 	bool combined = (dist0 & dist1) & (dist2 & dist3) & (dist4 & dist5);
 	return combined;
 }
+static inline __m128 _mm_rcp_ps_div(__m128 _A) {
+	return _mm_div_ps(_mm_set1_ps(1.0), _A);
+}
+bool Rasterizer::rasterizeOccludee(__m128* corners)
+{
+	if (bEnableOccludeeOBBQuery == false) return true; //need to active obb query feature first
+		corners[2] = _mm_rcp_ps(corners[3]);
+		corners[6] = _mm_rcp_ps(corners[7]);
+
+		__m128 lowerBound = _mm_set1_ps(-maxInvW);
+		__m128 upperBound = _mm_set1_ps(+maxInvW);
+		corners[2] = _mm_min_ps(upperBound, _mm_max_ps(lowerBound, corners[2]));
+		corners[6] = _mm_min_ps(upperBound, _mm_max_ps(lowerBound, corners[6]));
+
+
+		auto one8th = _mm_set1_ps(0.125f); //in the format of block
+		__m128 temp = _mm_mul_ps(corners[2], one8th);
+		corners[0] = _mm_mul_ps(corners[0], temp);
+		corners[1] = _mm_mul_ps(corners[1], temp);
+
+		temp = _mm_mul_ps(corners[6], one8th);
+		corners[4] = _mm_mul_ps(corners[4], temp);
+		corners[5] = _mm_mul_ps(corners[5], temp);
+
+		//          2————————3
+		//         /|       /|  
+		//        / |      / |
+		//       /  6-----/--7 
+		//      0————————1  / 
+		//      | /      | / 
+		//      |/       |/ 
+		//      4————————5
+
+
+		__m128 x[3];
+		__m128 y[3];
+		__m128 W[3];
+		__m128 invW[3];
+		
+		//**********************************************************************************
+		float* allData = (float*)corners;
+		float* allXf = allData;
+		float* allYf = allData+4;
+		float* allWInvf = allData+8;
+		float* allWf = allData+12;
+
+		OccluderRenderCache cache;
+		cache.c0 = _mm_set1_ps(0);
+		float* matF = (float*)m_OccludeelocalToClip;
+		cache.c1 = _mm_set1_ps(matF[3 * 4 + 2]);
+
+		//batch 1
+		{
+			//2, 0, 3,
+			//0, 1, 3,
+			//4, 6, 7,
+			//5, 4, 7,
+			const int all_index_0 = 2;		const int all_index_1 = 0;		const int all_index_2 = 3;
+			const int all_index_3 = 0;		const int all_index_4 = 1;		const int all_index_5 = 3;
+			const int all_index_6 = 16;		const int all_index_7 = 18;		const int all_index_8 = 19;
+			const int all_index_9 = 17;		const int all_index_10 = 16;	const int all_index_11 = 19;
+			x[2] = _mm_setr_ps(allXf[all_index_0], allXf[all_index_3], allXf[all_index_6], allXf[all_index_9]);
+			x[1] = _mm_setr_ps(allXf[all_index_1], allXf[all_index_4], allXf[all_index_7], allXf[all_index_10]);
+			x[0] = _mm_setr_ps(allXf[all_index_2], allXf[all_index_5], allXf[all_index_8], allXf[all_index_11]);
+			y[2] = _mm_setr_ps(allYf[all_index_0], allYf[all_index_3], allYf[all_index_6], allYf[all_index_9]);
+			y[1] = _mm_setr_ps(allYf[all_index_1], allYf[all_index_4], allYf[all_index_7], allYf[all_index_10]);
+			y[0] = _mm_setr_ps(allYf[all_index_2], allYf[all_index_5], allYf[all_index_8], allYf[all_index_11]);
+			invW[2] = _mm_setr_ps(allWInvf[all_index_0], allWInvf[all_index_3], allWInvf[all_index_6], allWInvf[all_index_9]);
+			invW[1] = _mm_setr_ps(allWInvf[all_index_1], allWInvf[all_index_4], allWInvf[all_index_7], allWInvf[all_index_10]);
+			invW[0] = _mm_setr_ps(allWInvf[all_index_2], allWInvf[all_index_5], allWInvf[all_index_8], allWInvf[all_index_11]);
+			W[2] = _mm_setr_ps(allWf[all_index_0], allWf[all_index_3], allWf[all_index_6], allWf[all_index_9]);
+			W[1] = _mm_setr_ps(allWf[all_index_1], allWf[all_index_4], allWf[all_index_7], allWf[all_index_10]);
+			W[0] = _mm_setr_ps(allWf[all_index_2], allWf[all_index_5], allWf[all_index_8], allWf[all_index_11]);
+			__m128 W0W1W2 = _mm_and_ps(_mm_and_ps(W[0], W[1]), (W[2]));
+			__m128 primitiveValid = _mm_xor_ps(W0W1W2, _mm_set1_ps(-0.0f));
+			drawTriangle<true, false, true>(x, y, invW, W, primitiveValid, &cache);
+			if (cache.mRasterizedOccludeeVisible) return true;
+		}
+		//batch 2
+		{
+			//0, 2, 6,
+			//4, 0, 6,
+			//3, 1, 7,
+			//1, 5, 7,
+			const int all_index_0 = 0;		const int all_index_1 = 2;			const int all_index_2 = 18;
+			const int all_index_3 = 16;		const int all_index_4 = 0;  		const int all_index_5 = 18;
+			const int all_index_6 = 3;		const int all_index_7 = 1;			const int all_index_8 = 19;
+			const int all_index_9 = 1;		const int all_index_10 = 17;		const int all_index_11 = 19;
+			x[2] = _mm_setr_ps(allXf[all_index_0], allXf[all_index_3], allXf[all_index_6], allXf[all_index_9]);
+			x[1] = _mm_setr_ps(allXf[all_index_1], allXf[all_index_4], allXf[all_index_7], allXf[all_index_10]);
+			x[0] = _mm_setr_ps(allXf[all_index_2], allXf[all_index_5], allXf[all_index_8], allXf[all_index_11]);
+			y[2] = _mm_setr_ps(allYf[all_index_0], allYf[all_index_3], allYf[all_index_6], allYf[all_index_9]);
+			y[1] = _mm_setr_ps(allYf[all_index_1], allYf[all_index_4], allYf[all_index_7], allYf[all_index_10]);
+			y[0] = _mm_setr_ps(allYf[all_index_2], allYf[all_index_5], allYf[all_index_8], allYf[all_index_11]);
+			invW[2] = _mm_setr_ps(allWInvf[all_index_0], allWInvf[all_index_3], allWInvf[all_index_6], allWInvf[all_index_9]);
+			invW[1] = _mm_setr_ps(allWInvf[all_index_1], allWInvf[all_index_4], allWInvf[all_index_7], allWInvf[all_index_10]);
+			invW[0] = _mm_setr_ps(allWInvf[all_index_2], allWInvf[all_index_5], allWInvf[all_index_8], allWInvf[all_index_11]);
+			W[2] = _mm_setr_ps(allWf[all_index_0], allWf[all_index_3], allWf[all_index_6], allWf[all_index_9]);
+			W[1] = _mm_setr_ps(allWf[all_index_1], allWf[all_index_4], allWf[all_index_7], allWf[all_index_10]);
+			W[0] = _mm_setr_ps(allWf[all_index_2], allWf[all_index_5], allWf[all_index_8], allWf[all_index_11]);
+			__m128 W0W1W2 = _mm_and_ps(_mm_and_ps(W[0], W[1]), (W[2]));
+			__m128 primitiveValid = _mm_xor_ps(W0W1W2, _mm_set1_ps(-0.0f));
+			drawTriangle<true, false, true>(x, y, invW, W, primitiveValid, &cache);
+			if (cache.mRasterizedOccludeeVisible) return true;
+		}
+
+		//batch 3
+		{
+			//0, 4, 5,
+			//1, 0, 5,
+			//6, 2, 7,
+			//2, 3, 7,
+			const int all_index_0 = 0;		const int all_index_1 = 16;		const int all_index_2 = 17;
+			const int all_index_3 = 1;		const int all_index_4 = 0;		const int all_index_5 = 17;
+			const int all_index_6 = 18;		const int all_index_7 = 2;		const int all_index_8 = 19;
+			const int all_index_9 = 2;		const int all_index_10 = 3;		const int all_index_11 = 19;
+			x[2] = _mm_setr_ps(allXf[all_index_0], allXf[all_index_3], allXf[all_index_6], allXf[all_index_9]);
+			x[1] = _mm_setr_ps(allXf[all_index_1], allXf[all_index_4], allXf[all_index_7], allXf[all_index_10]);
+			x[0] = _mm_setr_ps(allXf[all_index_2], allXf[all_index_5], allXf[all_index_8], allXf[all_index_11]);
+			y[2] = _mm_setr_ps(allYf[all_index_0], allYf[all_index_3], allYf[all_index_6], allYf[all_index_9]);
+			y[1] = _mm_setr_ps(allYf[all_index_1], allYf[all_index_4], allYf[all_index_7], allYf[all_index_10]);
+			y[0] = _mm_setr_ps(allYf[all_index_2], allYf[all_index_5], allYf[all_index_8], allYf[all_index_11]);
+			invW[2] = _mm_setr_ps(allWInvf[all_index_0], allWInvf[all_index_3], allWInvf[all_index_6], allWInvf[all_index_9]);
+			invW[1] = _mm_setr_ps(allWInvf[all_index_1], allWInvf[all_index_4], allWInvf[all_index_7], allWInvf[all_index_10]);
+			invW[0] = _mm_setr_ps(allWInvf[all_index_2], allWInvf[all_index_5], allWInvf[all_index_8], allWInvf[all_index_11]);
+			W[2] = _mm_setr_ps(allWf[all_index_0], allWf[all_index_3], allWf[all_index_6], allWf[all_index_9]);
+			W[1] = _mm_setr_ps(allWf[all_index_1], allWf[all_index_4], allWf[all_index_7], allWf[all_index_10]);
+			W[0] = _mm_setr_ps(allWf[all_index_2], allWf[all_index_5], allWf[all_index_8], allWf[all_index_11]);
+			__m128 W0W1W2 = _mm_and_ps(_mm_and_ps(W[0], W[1]), (W[2]));
+			__m128 primitiveValid = _mm_xor_ps(W0W1W2, _mm_set1_ps(-0.0f));
+			drawTriangle<true, false, true>(x, y, invW, W, primitiveValid, &cache);
+		}
+		return cache.mRasterizedOccludeeVisible;
+}
+
+
+bool Rasterizer::rasterizeOccludeeQuad(__m128* corners)
+{
+	if (bEnableOccludeeOBBQuery == false) return true; //need to active obb query feature first
+	corners[2] = _mm_rcp_ps(corners[3]);
+	__m128 lowerBound = _mm_set1_ps(-maxInvW);
+	__m128 upperBound = _mm_set1_ps(+maxInvW);
+	corners[2] = _mm_min_ps(upperBound, _mm_max_ps(lowerBound, corners[2]));
+
+	auto one8th = _mm_set1_ps(0.125f); //in the format of block
+	__m128 temp = _mm_mul_ps(corners[2], one8th);
+	corners[0] = _mm_mul_ps(corners[0], temp);
+	corners[1] = _mm_mul_ps(corners[1], temp);
+
+	//          2————————3
+	//         /        /  
+	//        /        /
+	//       /        /
+	//      0————————1
+	__m128 x[3];
+	__m128 y[3];
+	__m128 W[3];
+	__m128 invW[3];
+	//**********************************************************************************
+	float* allData = (float*)corners;
+	OccluderRenderCache cache;
+	cache.c0 = _mm_set1_ps(0);
+	float* matF = (float*)m_OccludeelocalToClip;
+	cache.c1 = _mm_set1_ps(matF[3 * 4 + 2]);
+
+	//2, 0, 3,
+	//0, 1, 3,
+	const int all_index_0 = 2;		const int all_index_1 = 0;		const int all_index_2 = 3;
+	const int all_index_3 = 0;		const int all_index_4 = 1;		const int all_index_5 = 3;
+	x[2] = _mm_setr_ps(allData[all_index_0], allData[all_index_3], 0, 0);
+	x[1] = _mm_setr_ps(allData[all_index_1], allData[all_index_4], 0, 0);
+	x[0] = _mm_setr_ps(allData[all_index_2], allData[all_index_5], 0, 0);
+	y[2] = _mm_setr_ps(allData[all_index_0 + 4], allData[all_index_3 + 4], 0, 0);
+	y[1] = _mm_setr_ps(allData[all_index_1 + 4], allData[all_index_4 + 4], 0, 0);
+	y[0] = _mm_setr_ps(allData[all_index_2 + 4], allData[all_index_5 + 4], 0, 0);
+	invW[2] = _mm_setr_ps(allData[all_index_0 + 8], allData[all_index_3 + 8], 0, 0);
+	invW[1] = _mm_setr_ps(allData[all_index_1 + 8], allData[all_index_4 + 8], 0, 0);
+	invW[0] = _mm_setr_ps(allData[all_index_2 + 8], allData[all_index_5 + 8], 0, 0);
+	W[2] = _mm_setr_ps(allData[all_index_0 + 12], allData[all_index_3 + 12], -0, -0);
+	W[1] = _mm_setr_ps(allData[all_index_1 + 12], allData[all_index_4 + 12], -0, -0);
+	W[0] = _mm_setr_ps(allData[all_index_2 + 12], allData[all_index_5 + 12], -0, -0);
+	__m128 W0W1W2 = _mm_and_ps(_mm_and_ps(W[0], W[1]), (W[2]));
+	__m128 primitiveValid = _mm_xor_ps(W0W1W2, _mm_set1_ps(-0.0f));
+
+	drawTriangle<true, false, true>(x, y, invW, W, primitiveValid, &cache);
+	return cache.mRasterizedOccludeeVisible;
+}
+
+
+//for occludee obb query only
+template <bool bOccludeeWidth1024, bool multiThreadQuery>
+bool Rasterizer::queryVisibility_QUAD(const float* obb)
+{
+	if (bEnableOccludeeOBBQuery == false) return true; //need to active obb query feature first
+	// Transform edges
+	__m128 corners[4];
+
+	//          2————————3
+	//         /        /  
+	//        /        /
+	//       /        /
+	//      0————————1
+
+	__m128* localToClip = this->m_OccludeelocalToClip;
+	corners[0] =
+		_mm_fmadd_ps(localToClip[0], _mm_set1_ps(obb[0]),
+			_mm_fmadd_ps(localToClip[1], _mm_set1_ps(obb[1]),
+				_mm_fmadd_ps(localToClip[2], _mm_set1_ps(obb[2]), localToClip[3])));
+	corners[1] =
+		_mm_fmadd_ps(localToClip[0], _mm_set1_ps(obb[3]),
+			_mm_fmadd_ps(localToClip[1], _mm_set1_ps(obb[4]),
+				_mm_fmadd_ps(localToClip[2], _mm_set1_ps(obb[5]), localToClip[3])));
+	corners[2] =
+		_mm_fmadd_ps(localToClip[0], _mm_set1_ps(obb[6]),
+			_mm_fmadd_ps(localToClip[1], _mm_set1_ps(obb[7]),
+				_mm_fmadd_ps(localToClip[2], _mm_set1_ps(obb[8]), localToClip[3])));
+	corners[3] = _mm_add_ps(corners[1], _mm_sub_ps(corners[2], corners[0]));
+	
+
+	// Transpose into SoA
+	_MM_TRANSPOSE4_PS(corners[0], corners[1], corners[2], corners[3]);
+
+
+	bool requireClip = false;
+	__m128 closeToNearPlane = _mm_cmplt_ps(corners[3], _mm_set1_ps(mNearPlane));
+	requireClip = !_mm_same_sign0(closeToNearPlane);
+
+
+	if (requireClip)
+	{
+		if (_mm_same_sign1_soc(corners[3]))
+		{
+			return false;
+		}
+
+		//__m128 obbPoints[4];
+		//obbPoints[0] = _mm_setr_ps(obb[0], obb[1], obb[2], 1.0);
+		//obbPoints[1] = _mm_setr_ps(obb[3], obb[4], obb[5], 1.0);
+		//obbPoints[2] = _mm_setr_ps(obb[6], obb[7], obb[8], 1.0);
+		//obbPoints[3] = _mm_sub_ps(_mm_add_ps(obbPoints[1], obbPoints[2]), obbPoints[0]);
+		//__m128 min = _mm_min_ps(_mm_min_ps(obbPoints[0], obbPoints[1]), _mm_min_ps(obbPoints[2], obbPoints[3]));
+		//__m128 minmax_sum = _mm_add_ps(obbPoints[1], obbPoints[2]);
+		//__m128 extents = _mm_sub_ps(_mm_sub_ps(minmax_sum, min), min);
+
+		__m128 min = _mm_setr_ps(obb[12], obb[13], obb[14], 1);
+		__m128 max = _mm_setr_ps(obb[15], obb[16], obb[17], 1);
+		__m128 extents = _mm_sub_ps(max, min);
+		__m128 minmax_sum = _mm_add_ps(min, max);
+
+		if (inFrustum(minmax_sum, extents, localToClip+4) == false) {
+			return false;
+		}
+
+		if (Rasterize_ClippedOccludee_AS_OCCLUDER_OBB) {
+			if (obb[10] == 1.0) { //if 10th value set to 1, continue to rasterizeQuad
+				return rasterizeOccludeeQuad(corners);
+			}
+			return true;
+		}
+	}
+
+	bool visible = requireClip;
+	if (requireClip == false)  //visibility still unknown
+	{
+
+		// Perspective division
+		corners[3] = _mm_rcp_ps(corners[3]);
+		corners[0] = _mm_mul_ps(corners[0], corners[3]);
+		corners[1] = _mm_mul_ps(corners[1], corners[3]);
+		corners[2] = _mm_mul_ps(corners[2], corners[3]);
+
+		// Vertical mins and maxes
+		__m128 minsX = corners[0];
+		__m128 maxsX = corners[0];
+
+		__m128 minsY = corners[1];
+		__m128 maxsY = corners[1];
+		__m128i	minsXY = _mm_cvttps_epi32(_mm_min_ps(_mm_unpacklo_ps(minsX, minsY), _mm_unpackhi_ps(minsX, minsY)));
+		__m128i	maxsXY = _mm_cvttps_epi32(_mm_max_ps(_mm_unpacklo_ps(maxsX, maxsY), _mm_unpackhi_ps(maxsX, maxsY)));
+
+		__m128i minThreshold = _mm_set1_epi32(0);
+
+		minsXY = _mm_max_epi32(minsXY, minThreshold);
+		//already frustum culled. limit the max of minXY
+		maxsXY = _mm_min_epi32(maxsXY, m_MaxCoordOccludee_WHWH);
+
+
+		// Horizontal reduction, step 2
+		__m128i minXYMaxXYLo = _mm_unpacklo_epi32(minsXY, maxsXY);
+		__m128i minXYMaxXYHi = _mm_unpackhi_epi32(minsXY, maxsXY);
+
+		__m128i boundsI[2];
+		boundsI[0] = _mm_min_epi32(minXYMaxXYLo, minXYMaxXYHi);
+		boundsI[1] = _mm_max_epi32(minXYMaxXYLo, minXYMaxXYHi);
+
+
+		int* bounds = (int*)boundsI;
+
+		//frustum culling
+		//very useful for interleave mode occluder
+		{
+			if (bounds[0] > bounds[5] || bounds[2] > bounds[7])
+			{
+				return false;
+			}
+		}
+
+
+		{
+			uint32_t minX = bounds[0];
+			uint32_t maxX = bounds[5];
+			uint32_t minY = bounds[2];
+			uint32_t maxY = bounds[7];
+			__m128i depth = packQueryDepth(corners[2]);
+			uint16_t maxZ = _mm_max_epu16_even(depth);
+			if (ShowOccludeeInDepthMap && multiThreadQuery == false)
+			{
+				mCurrentOccludee = ((uint64_t)minX << 48) | ((uint64_t)maxX << 32) | ((uint64_t)minY << 16) | (uint64_t)maxY;
+				mCurrentOccludeeDepth = maxZ;
+			}
+			visible = query2D<false, bOccludeeWidth1024>(minX, maxX, minY, maxY, maxZ);
+		}
+
+	}
+
+	//refactor previous multiple exit to this single exit
+	return visible;
+}
+
+
+//for occludee obb query only
+template <bool bQueryOccluder, bool bOccludeeWidth1024, bool multiThreadQuery>
+bool Rasterizer::queryVisibility_OBB(const float* obb)
+{
+	if (bEnableOccludeeOBBQuery == false) return true; //need to active obb query feature first
+	if (obb[9] == std::numeric_limits<float>::infinity()) {
+		return queryVisibility_QUAD<bOccludeeWidth1024, multiThreadQuery>(obb);
+	}
+	// Transform edges
+	__m128 corners[8];
+
+//          2————————3
+//         /|       /|  
+//        / |      / |
+//       /  6-----/--7 
+//      0————————1  / 
+//      | /      | / 
+//      |/       |/ 
+//      4————————5
+
+	__m128* localToClip = this->m_OccludeelocalToClip;
+	corners[0] =
+		_mm_fmadd_ps(localToClip[0], _mm_set1_ps(obb[0]),
+			_mm_fmadd_ps(localToClip[1], _mm_set1_ps(obb[1]),
+				_mm_fmadd_ps(localToClip[2], _mm_set1_ps(obb[2]), localToClip[3])));
+	corners[1] =
+		_mm_fmadd_ps(localToClip[0], _mm_set1_ps(obb[3]),
+			_mm_fmadd_ps(localToClip[1], _mm_set1_ps(obb[4]),
+				_mm_fmadd_ps(localToClip[2], _mm_set1_ps(obb[5]), localToClip[3])));
+	corners[2] =
+		_mm_fmadd_ps(localToClip[0], _mm_set1_ps(obb[6]),
+			_mm_fmadd_ps(localToClip[1], _mm_set1_ps(obb[7]),
+				_mm_fmadd_ps(localToClip[2], _mm_set1_ps(obb[8]), localToClip[3])));
+	corners[3] = _mm_add_ps(corners[1], _mm_sub_ps(corners[2], corners[0]));
+	corners[4] =
+		_mm_fmadd_ps(localToClip[0], _mm_set1_ps(obb[9]),
+			_mm_fmadd_ps(localToClip[1], _mm_set1_ps(obb[10]),
+				_mm_fmadd_ps(localToClip[2], _mm_set1_ps(obb[11]), localToClip[3])));
+
+	__m128 edge40 = _mm_sub_ps(corners[4], corners[0]);
+	corners[5] = _mm_add_ps(corners[1], edge40);
+	corners[6] = _mm_add_ps(corners[2], edge40);
+	corners[7] = _mm_add_ps(corners[3], edge40);
+
+	// Transpose into SoA
+	_MM_TRANSPOSE4_PS(corners[0], corners[1], corners[2], corners[3]);
+	_MM_TRANSPOSE4_PS(corners[4], corners[5], corners[6], corners[7]);
+
+
+
+	bool requireClip = false;
+	__m128 closeToNearPlane = _mm_cmplt_ps(_mm_min_ps(corners[3], corners[7]), _mm_set1_ps(mNearPlane));
+	requireClip = !_mm_same_sign0(closeToNearPlane);
+	
+
+	if (requireClip)
+	{
+		__m128 depthJoint = _mm_and_ps(corners[3], corners[7]);
+		if (_mm_same_sign1_soc(depthJoint))
+		{
+			return false;
+		}
+
+		__m128 min;
+		__m128 max;
+		if(nOcludeeOBBSize == 12)
+		{
+			__m128 obbPoints[8];
+			obbPoints[0] = _mm_setr_ps(obb[0], obb[1], obb[2], 1.0);
+			obbPoints[1] = _mm_setr_ps(obb[3], obb[4], obb[5], 1.0);
+			obbPoints[2] = _mm_setr_ps(obb[6], obb[7], obb[8], 1.0);
+			obbPoints[3] = _mm_sub_ps(_mm_add_ps(obbPoints[1], obbPoints[2]), obbPoints[0]);
+
+			obbPoints[4] = _mm_setr_ps(obb[9], obb[10], obb[11], 1.0);
+			__m128 d40 = _mm_sub_ps(obbPoints[4], obbPoints[0]);
+			obbPoints[5] = _mm_add_ps(obbPoints[1], d40);
+			obbPoints[6] = _mm_add_ps(obbPoints[2], d40);
+			obbPoints[7] = _mm_add_ps(obbPoints[3], d40);
+
+
+			min = obbPoints[0];
+			max = obbPoints[0];
+			for (int idx = 1; idx <= 7; idx++) {
+				min = _mm_min_ps(min, obbPoints[idx]);
+				max = _mm_max_ps(max, obbPoints[idx]);
+			}
+		}
+		else {
+			min = _mm_setr_ps(obb[12], obb[13], obb[14], 1);
+			max = _mm_setr_ps(obb[15], obb[16], obb[17], 1);
+		}		
+
+		__m128 extents = _mm_sub_ps(max, min);
+
+		__m128* FrustumPlane =  localToClip+4;
+		__m128 min_max_sum = _mm_add_ps(min, max);
+		if (inFrustum(min_max_sum, extents, FrustumPlane) == false) {
+			return false;
+		}
+
+		if (Rasterize_ClippedOccludee_AS_OCCLUDER_OBB) {
+			return rasterizeOccludee(corners);
+		}
+	}
+
+	bool visible = requireClip;
+	if (requireClip == false)  //visibility still unknown
+	{
+
+		// Perspective division
+		corners[3] = _mm_rcp_ps(corners[3]);
+		corners[0] = _mm_mul_ps(corners[0], corners[3]);
+		corners[1] = _mm_mul_ps(corners[1], corners[3]);
+		corners[2] = _mm_mul_ps(corners[2], corners[3]);
+
+		corners[7] = _mm_rcp_ps(corners[7]);
+		corners[4] = _mm_mul_ps(corners[4], corners[7]);
+		corners[5] = _mm_mul_ps(corners[5], corners[7]);
+		corners[6] = _mm_mul_ps(corners[6], corners[7]);
+
+		// Vertical mins and maxes
+		__m128 minsX = _mm_min_ps(corners[0], corners[4]);
+		__m128 maxsX = _mm_max_ps(corners[0], corners[4]);
+
+		__m128 minsY = _mm_min_ps(corners[1], corners[5]);
+		__m128 maxsY = _mm_max_ps(corners[1], corners[5]);
+		__m128i	minsXY = _mm_cvttps_epi32(_mm_min_ps(_mm_unpacklo_ps(minsX, minsY), _mm_unpackhi_ps(minsX, minsY)));
+		__m128i	maxsXY = _mm_cvttps_epi32(_mm_max_ps(_mm_unpacklo_ps(maxsX, maxsY), _mm_unpackhi_ps(maxsX, maxsY)));
+
+		__m128i minThreshold = _mm_set1_epi32(0);
+
+		minsXY = _mm_max_epi32(minsXY, minThreshold);
+		//already frustum culled. limit the max of minXY
+		maxsXY = _mm_min_epi32(maxsXY, m_MaxCoordOccludee_WHWH);
+		
+
+		// Horizontal reduction, step 2
+		__m128i minXYMaxXYLo = _mm_unpacklo_epi32(minsXY, maxsXY);
+		__m128i minXYMaxXYHi = _mm_unpackhi_epi32(minsXY, maxsXY);
+
+		__m128i boundsI[2];
+		boundsI[0] = _mm_min_epi32(minXYMaxXYLo, minXYMaxXYHi);
+		boundsI[1] = _mm_max_epi32(minXYMaxXYLo, minXYMaxXYHi);
+
+
+		int* bounds = (int*)boundsI;
+
+		//frustum culling
+		//very useful for interleave mode occluder
+		{
+			if (bounds[0] > bounds[5] || bounds[2] > bounds[7])
+			{
+				if (DebugOccluderOccludee)
+				{
+					this->DebugData[OccluderCulled] += bQueryOccluder;
+				}
+				return false;
+			}
+		}
+
+
+		{
+			uint32_t minX = bounds[0];
+			uint32_t maxX = bounds[5];
+			uint32_t minY = bounds[2];
+			uint32_t maxY = bounds[7];
+			__m128i depth = packQueryDepth(_mm_max_ps(corners[2], corners[6]));
+			uint16_t maxZ = _mm_max_epu16_even(depth);			
+			if (ShowOccludeeInDepthMap && multiThreadQuery == false)
+			{
+				mCurrentOccludee = ((uint64_t)minX << 48) | ((uint64_t)maxX << 32) | ((uint64_t)minY << 16) | (uint64_t)maxY;
+				mCurrentOccludeeDepth = maxZ;
+			}
+			visible = query2D<false, bOccludeeWidth1024>(minX, maxX, minY, maxY, maxZ);
+		}
+
+	}
+	
+
+	if (DebugOccluderOccludee)
+	{
+		this->DebugData[OccluderCulled] += bQueryOccluder && (visible == false);
+	}
+	//refactor previous multiple exit to this single exit
+	return visible;
+}
+
+void Rasterizer::prepareOccludeeRasterization(const float* data, OccluderRenderCache* occ)
+{
+	const float* minExtents = data + 2; //minExtents
+	__m128* localToClip = occ->m_localToClipPointer;
+
+	// Transform edges
+	__m128 egde0 = _mm_mul_ps(localToClip[0], _mm_set1_ps(minExtents[3]));
+	__m128 egde1 = _mm_mul_ps(localToClip[1], _mm_set1_ps(minExtents[4]));
+	__m128 egde2 = _mm_mul_ps(localToClip[2], _mm_set1_ps(minExtents[5]));
+	__m128 corners4 =
+		_mm_fmadd_ps(localToClip[0], _mm_set1_ps(minExtents[0]),
+			_mm_fmadd_ps(localToClip[1], _mm_set1_ps(minExtents[1]),
+				_mm_fmadd_ps(localToClip[2], _mm_set1_ps(minExtents[2]), localToClip[3])));
+	occ->mat[3] = corners4; // as clipped occludee might need to go through rasterize path
+
+	float w4 = ((float*)&corners4)[3];
+	float e04 = ((float*)&egde0)[3];
+	float e14 = ((float*)&egde1)[3];
+	float e24 = ((float*)&egde2)[3];
+
+	w4 = std::min(w4, w4 + e04);
+	w4 = std::min(w4, w4 + e14);
+	w4 = std::min(w4, w4 + e24);
+
+
+	occ->NeedsClipping = w4 < mNearPlane;
+	occ->prepareCache(egde0, egde1, egde2);
+
+
+	memcpy(occ->FullMeshInvExtents, data + 8, 8 * sizeof(float));
+}
 
 template <bool bQueryOccluder, bool bOccludeeWidth1024, bool multiThreadQuery>
-bool Rasterizer::queryVisibility(const float* minmaxf)
+bool Rasterizer::queryVisibility(const float* minmaxf, OccluderRenderCache* occ)
 {
     // Frustum cull
 	__m128 extents;
@@ -1301,41 +1945,104 @@ bool Rasterizer::queryVisibility(const float* minmaxf)
 	}
 	else 
 	{
+		if (bTestQUADByAABB) {
+			bool testobb = false;
+			float obb[18];
+			//p0
+			obb[0] = minmaxf[0];
+			obb[1] = minmaxf[1];
+			obb[2] = minmaxf[5];
+
+			//p1
+			obb[3] = minmaxf[3];
+			obb[4] = minmaxf[1];
+			obb[5] = minmaxf[5];
+
+			//p2
+			obb[6] = minmaxf[0];
+			obb[7] = minmaxf[4];
+			obb[8] = minmaxf[5];
+
+			//p4
+			obb[9] = std::numeric_limits<float>::infinity();;
+			obb[10] = std::numeric_limits<float>::infinity();;
+			obb[11] = std::numeric_limits<float>::infinity();;
+			memcpy(obb + 12, minmaxf, 6 * sizeof(float));
+			
+			testobb = queryVisibility_OBB< bQueryOccluder, bOccludeeWidth1024, multiThreadQuery>(obb);
+			return testobb;
+		}
+		if (bTestObbByAABB) {
+			bool testobb = false;
+			float obb[18];
+			//p0
+			obb[0] = minmaxf[0];
+			obb[1] = minmaxf[1];
+			obb[2] = minmaxf[5];
+
+			//p1
+			obb[3] = minmaxf[3];
+			obb[4] = minmaxf[1];
+			obb[5] = minmaxf[5];
+
+			//p2
+			obb[6] = minmaxf[0];
+			obb[7] = minmaxf[4];
+			obb[8] = minmaxf[5];
+
+			//p4
+			obb[9] = minmaxf[0];
+			obb[10] = minmaxf[1];
+			obb[11] = minmaxf[2];
+			memcpy(obb + 12, minmaxf, 6 * sizeof(float));
+			testobb = queryVisibility_OBB< bQueryOccluder, bOccludeeWidth1024, multiThreadQuery>(obb);
+			return testobb;
+		}
+		
 		extents = _mm_setr_ps(minmaxf[3] - minmaxf[0], minmaxf[4] - minmaxf[1], minmaxf[5] - minmaxf[2], 0);
 	}
 	
 	
+	__m128* localToClip = m_OccludeelocalToClip;
+	if (bQueryOccluder) localToClip = occ->m_localToClipPointer;
 
     // Transform edges
-    __m128 egde0 = _mm_mul_ps_scalar_soc(m_localToClip[0], extents, 0);
-	__m128 egde1 = _mm_mul_ps_scalar_soc(m_localToClip[1], extents, 1);
-	__m128 egde2 = _mm_mul_ps_scalar_soc(m_localToClip[2], extents, 2);
+    __m128 egde0 = _mm_mul_ps_scalar_soc(localToClip[0], extents, 0);
+	__m128 egde1 = _mm_mul_ps_scalar_soc(localToClip[1], extents, 1);
+	__m128 egde2 = _mm_mul_ps_scalar_soc(localToClip[2], extents, 2);
 	__m128 corners[8];
 
+//          2————————3
+//         /|       /|  
+//        / |      / |
+//       /  6-----/--7 
+//      0————————1  / 
+//      | /      | / 
+//      |/       |/ 
+//      4————————5
+// 
 	// Transform first corner
-	corners[0] =
-		_mm_fmadd_ps(m_localToClip[0], _mm_set1_ps(minmaxf[0]),
-			_mm_fmadd_ps(m_localToClip[1], _mm_set1_ps(minmaxf[1]),
-				_mm_fmadd_ps(m_localToClip[2], _mm_set1_ps(minmaxf[2]), m_localToClip[3])));
-
+	corners[4] =
+		_mm_fmadd_ps(localToClip[0], _mm_set1_ps(minmaxf[0]),
+			_mm_fmadd_ps(localToClip[1], _mm_set1_ps(minmaxf[1]),
+				_mm_fmadd_ps(localToClip[2], _mm_set1_ps(minmaxf[2]), localToClip[3])));
 
 	if (bQueryOccluder)
 	{
-		mOccluderCache.mat[3] = corners[0];
+		occ->mat[3] = corners[4]; // as clipped occludee might need to go through rasterize path
 	}
 
 	
 	// Transform remaining corners by adding edge vectors
-	corners[1] = _mm_add_ps(corners[0], egde0);
-	corners[2] = _mm_add_ps(corners[0], egde1);
-	corners[4] = _mm_add_ps(corners[0], egde2);
 
-	corners[3] = _mm_add_ps(corners[1], egde1);
 	corners[5] = _mm_add_ps(corners[4], egde0);
-	corners[6] = _mm_add_ps(corners[2], egde2);
+	corners[6] = _mm_add_ps(corners[4], egde1);
+	corners[7] = _mm_add_ps(corners[5], egde1);
 
-	//corners[7] = _mm_add_ps(corners[6], egde0); //same logic, less depdent on previous instruction
-	corners[7] = _mm_add_ps(corners[3], egde2);
+	corners[0] = _mm_add_ps(corners[4], egde2);
+	corners[1] = _mm_add_ps(corners[5], egde2);
+	corners[2] = _mm_add_ps(corners[6], egde2);
+	corners[3] = _mm_add_ps(corners[7], egde2);
 	// Transpose into SoA
 	_MM_TRANSPOSE4_PS(corners[0], corners[1], corners[2], corners[3]);
 	_MM_TRANSPOSE4_PS(corners[4], corners[5], corners[6], corners[7]);
@@ -1360,7 +2067,7 @@ bool Rasterizer::queryVisibility(const float* minmaxf)
 			requireClip = !_mm_same_sign0(closeToNearPlane);
 
 			//clipping is for rasterization use only
-			mOccluderCache.NeedsClipping = requireClip; 
+			occ->NeedsClipping = requireClip; 
 
 
 			//VERIFICATION with previous approach
@@ -1391,6 +2098,40 @@ bool Rasterizer::queryVisibility(const float* minmaxf)
 			//__m128 closeToNearPlane = _mm_or_ps(_mm_cmplt_ps(corners[3], nearPlaneEpsilon), _mm_cmplt_ps(corners[7], nearPlaneEpsilon));
 			__m128 closeToNearPlane = _mm_cmplt_ps(_mm_min_ps(corners[3], corners[7]), nearPlaneEpsilon);
 			requireClip = !_mm_same_sign0(closeToNearPlane);
+		}
+
+
+		if (requireClip && Rasterize_ClippedOccludee_AS_OCCLUDER_AABB) {
+			__m128 boundsMin = _mm_setr_ps(minmaxf[0], minmaxf[1], minmaxf[2], 1.0f);
+			__m128 boundsMax = _mm_setr_ps(minmaxf[3], minmaxf[4], minmaxf[5], 1.0f);
+
+			__m128* FrustumPlane = localToClip + 4;
+			__m128 min_max_sum = _mm_add_ps(boundsMax, boundsMin);
+			if (!inFrustum(min_max_sum, extents, FrustumPlane))
+			{
+				if (DebugOccluderOccludee)
+				{
+					if (bQueryOccluder == false)
+					{
+						this->DebugData[OccludeeFrustumCull]++;
+						this->DebugData[OccludeeCull]++;
+					}
+					else {
+						this->DebugData[OccluderCulled]++;
+						this->DebugData[OccluderFrustumCulled]++;
+					}
+				}
+				return false;
+			}
+
+			if (minmaxf[0] <= mCameraPos[0] && minmaxf[3] >= mCameraPos[0]
+				&& minmaxf[1] <= mCameraPos[1] && minmaxf[4] >= mCameraPos[1]
+				&& minmaxf[2] <= mCameraPos[2] && minmaxf[5] >= mCameraPos[2]) {
+				return true;
+			}
+			else {
+				return this->rasterizeOccludee(corners);
+			}
 		}
 	}
 
@@ -1504,7 +2245,7 @@ bool Rasterizer::queryVisibility(const float* minmaxf)
 		{
 			if (visible)
 			{
-				mOccluderCache.prepareCache(egde0, egde1, egde2);
+				occ->prepareCache(egde0, egde1, egde2);
 			}
 		}
 	}
@@ -1525,14 +2266,15 @@ bool Rasterizer::queryVisibility(const float* minmaxf)
 					if (bQueryOccluder)
 					{
 						boundsMax = _mm_add_ps(boundsMin, extents);
-						UpdateFrustumCullPlane(); //delay the frustum culling plane preparation for occluders
 					}
 					else
 					{
 						boundsMax = _mm_setr_ps(minmaxf[3], minmaxf[4], minmaxf[5], 1.0f);
 					}
 
-					assert(inFrustum(boundsMin, boundsMax, extents) == false);
+					__m128* FrustumPlane = localToClip + 4;
+					auto min_max_sum = _mm_add_ps(boundsMax, boundsMin);
+					assert(inFrustum(min_max_sum, extents, FrustumPlane) == false);
 				}
 				return false;
 			}
@@ -1546,14 +2288,15 @@ bool Rasterizer::queryVisibility(const float* minmaxf)
 			if (bQueryOccluder)
 			{
 				boundsMax = _mm_add_ps(boundsMin, extents);
-				UpdateFrustumCullPlane(); //delay the frustum culling plane preparation for occluders
 			}
 			else
 			{
 				boundsMax = _mm_setr_ps(minmaxf[3], minmaxf[4], minmaxf[5], 1.0f);
 			}
 
-			if (!inFrustum(boundsMin, boundsMax, extents))
+			__m128* FrustumPlane = localToClip + 4;
+			__m128 min_max_sum = _mm_add_ps(boundsMax, boundsMin);
+			if (!inFrustum(min_max_sum, extents, FrustumPlane))
 			{
 				if (DebugOccluderOccludee)
 				{
@@ -1572,7 +2315,7 @@ bool Rasterizer::queryVisibility(const float* minmaxf)
 		}
 
 		if (bQueryOccluder) {
-			mOccluderCache.prepareCache(egde0, egde1, egde2);
+			occ->prepareCache(egde0, egde1, egde2);
 		}
 
 		if (DebugOccluderOccludee)
@@ -1606,6 +2349,13 @@ static inline int mask70(int idx)
 template <bool bQueryOccluder, bool bOccludeeWidth1024>
 bool Rasterizer::query2D(uint32_t pixelMinX, uint32_t pixelMaxX, uint32_t pixelMinY, uint32_t pixelMaxY, uint16_t maxZ)
 {		
+	if (bQueryOccluder == false && bTestObbByAABB) {
+		static int testlog = 0;
+		testlog++;
+		testlog = testlog & 1;
+		//std::cout << testlog << " minx " << pixelMinX << " maxX " << pixelMaxX << " minY " << pixelMinY << " maxY " << pixelMaxY << " maxZ " << maxZ << std::endl;
+	}
+
 	if (DebugOccluderOccludee && bQueryOccluder == false) 
 	{
 		DebugData[MaxOccludeeZ] = std::max<uint16_t>(maxZ, DebugData[MaxOccludeeZ]);
@@ -1694,7 +2444,7 @@ bool Rasterizer::query2D(uint32_t pixelMinX, uint32_t pixelMaxX, uint32_t pixelM
 				{
 					DebugData[FastBlockDepthCompare]++;
 				}
-				if (maxZ > pHiZ[0])
+				if (maxZ >= pHiZ[0])
 				{
 					if (pHiZ[0] == 0)
 					{
@@ -1803,7 +2553,7 @@ bool Rasterizer::query2D(uint32_t pixelMinX, uint32_t pixelMaxX, uint32_t pixelM
 		{
 			uint16_t hiz = pHiZ[0]; 
 			// Skip this block if it fully occludes the query box
-			if (maxZ <= hiz)
+			if (maxZ < hiz)
 			{
 				continue;
 			}
@@ -1848,10 +2598,10 @@ bool Rasterizer::query2D(uint32_t pixelMinX, uint32_t pixelMaxX, uint32_t pixelM
 			{
 				if (hiz <= MIN_UPDATED_BLOCK_DEPTH2 && PairBlockNum != PureCheckerBoardApproach) //partial updated block
 				{
-					uint64_t check = mPrimitiveBoundaryClip->PixelMinXMask[startX] & 
-							mPrimitiveBoundaryClip->PixelMaxXMask[endX] &
-							mPrimitiveBoundaryClip->PixelMinYMask[startY] &
-							mPrimitiveBoundaryClip->PixelMaxYMask[endY];
+					uint64_t check = mPixelBound->PixelMinXMask[startX] & 
+						mPixelBound->PixelMaxXMask[endX] &
+						mPixelBound->PixelMinYMask[startY] &
+						mPixelBound->PixelMaxYMask[endY];
 					uint64_t * maskData = GetMaskData(pBlockDepth, blockX & 1);
 					if (containPattern10(check, maskData[0]))
 					{
@@ -1892,12 +2642,13 @@ bool Rasterizer::query2D(uint32_t pixelMinX, uint32_t pixelMaxX, uint32_t pixelM
 						if (DebugOccluderOccludee && !bQueryOccluder)
 							DebugData[BlockRowCheck]++;
 						auto dy = startBlockDepth[y];
-						__m128i visible = _mm_cmplt_epu16_soc(dy, maxZV);
+						__m128i visible = _mm_cmple_epu16_soc(dy, maxZV);
 						int visiblePixelMask = _mm_movemask_epi16_soc(visible);
 
 						int currentRowSelector = rowSelector;
 						if (currentRowSelector & visiblePixelMask & checkerBoardMask[y])
 						{
+							//LOGI("query2D : %d, %d, %d", currentRowSelector, visiblePixelMask, checkerBoardMask[y]);
 							if (DebugOccluderOccludee && !bQueryOccluder)
 							{
 								DebugData[BlockPixelPass]++;
@@ -1948,16 +2699,17 @@ bool Rasterizer::query2D(uint32_t pixelMinX, uint32_t pixelMaxX, uint32_t pixelM
 }
 static __m128i CompareWithExtraBuffer(__m128i blockData, __m128i  extraRoot)
 {
-	__m128i valid = _mm_cmplt_epu16_soc(_mm_setzero_si128(), extraRoot);
-	__m128i match = _mm_cmple_epu16_soc(blockData, extraRoot);
-	match = _mm_and_si128(valid, match);
+	return _mm_or_si128(blockData, extraRoot);
+	//__m128i valid = _mm_cmplt_epu16_soc(_mm_setzero_si128(), extraRoot);
+	//__m128i match = _mm_cmple_epu16_soc(blockData, extraRoot);
+	//match = _mm_and_si128(valid, match);
 
 
-	__m128i gray = _mm_srli_epi16(blockData, 1);
-	__m128i gray2 = _mm_srli_epi16(blockData, 2);
-	gray = _mm_adds_epu8(gray, gray2);
+	//__m128i gray = _mm_srli_epi16(blockData, 1);
+	//__m128i gray2 = _mm_srli_epi16(blockData, 2);
+	//gray = _mm_adds_epu8(gray, gray2);
 
-	return _mm_or_si128(gray, match);
+	//return _mm_or_si128(gray, match);
 }
 
 #if defined( SUPPORT_ALL_FEATURE)
@@ -1985,6 +2737,57 @@ static void SaveCheckBoard(uint64_t mask, uint8_t * target)
 }
 #endif
 
+
+float decompressFloat(uint16_t depth)
+{
+	const float bias = 3.9623753e+28f; // 1.0f / floatCompressionBias
+
+	union {
+		uint32_t u;
+		float f;
+	} U = { uint32_t(depth) << 12 };
+	return  (U.f * bias);
+}
+uint64_t Rasterizer::applyToneMapping(__m128i a, common::DumpImageMode mode)
+{
+
+	if (mode == DumpFullMin)
+		return _mm_getUint16Max8_soc(_mm_slli_epi32(_mm_and_si128(a, _mm_set1_epi16(255)), 8));  	//return _mm_getUint16Min8_soc(a);
+	if (mode == DumpFullMax)
+		return _mm_getUint16Max8_soc(a);
+
+	//project [maxDepth, minDepth] to [55, 255]. Developer can tone the minDepth/maxDepth
+	const float minDepth = 1.0f;
+	const float maxDepth = 1000.0f;
+
+	uint64_t result = 0;
+	__m128i data[2];
+	data[0] = _mm_and_si128(a, _mm_set1_epi32(65535));
+	data[1] = _mm_srli_epi32(a, 16);
+	__m128 toneMin128 = _mm_set1_ps(minDepth);
+	__m128 toneScale = _mm_set1_ps(200.0f / (maxDepth - minDepth));
+	for (int idx = 0; idx < 2; idx++) {
+		__m128 inputf = _mm_castsi128_ps(_mm_slli_epi32(data[idx], 12));
+		__m128 mask = _mm_cmpgt_ps(inputf, _mm_set1_ps(0.0f));
+		__m128 scale = _mm_set1_ps(3.9623753e+28f);
+		inputf = _mm_mul_ps(inputf, scale);
+		inputf = _mm_rcp_ps(inputf);
+		inputf = _mm_min_ps(_mm_max_ps(inputf, toneMin128), _mm_set1_ps(maxDepth));
+		inputf = _mm_sub_ps(inputf, toneMin128);
+		inputf = _mm_mul_ps(inputf, toneScale);
+		inputf = _mm_sub_ps(_mm_set1_ps(255.0f), inputf);
+		inputf = _mm_and_ps(inputf, mask);
+
+		float* fp1 = (float*)&inputf;
+		uint64_t output = 0;
+		output |= ((uint64_t)fp1[0]);
+		output |= ((uint64_t)fp1[1]) << (2 * 8);
+		output |= ((uint64_t)fp1[2]) << (4 * 8);
+		output |= ((uint64_t)fp1[3]) << (6 * 8);
+		result |= output << (idx << 3);
+	}
+	return result;
+}
 bool Rasterizer::readBackDepth(unsigned char *target, common::DumpImageMode mode)
 {
 
@@ -2125,7 +2928,7 @@ bool Rasterizer::readBackDepth(unsigned char *target, common::DumpImageMode mode
 				int totalBlocks = (int)( this->m_totalPixels >> 3);
 				for (int idx = 0; idx < totalBlocks; idx++) 
 				{
-					input[idx] = _mm_getUint16Max8_soc(extraRoot[idx]);
+					input[idx] = applyToneMapping(extraRoot[idx], mode);
 				}
 			}
 		}
@@ -2159,7 +2962,7 @@ bool Rasterizer::readBackDepth(unsigned char *target, common::DumpImageMode mode
 								int count = (int)(dest64 - targetRoot);
 
 								__m128i valid = _mm_cmplt_epu16_soc(_mm_setzero_si128(), extraRoot[count]);
-								*dest64 = _mm_getUint16Max8_soc(valid);
+								*dest64 = applyToneMapping(valid, mode);
 							}
 							else {
 								*dest64 = 0;
@@ -2174,7 +2977,7 @@ bool Rasterizer::readBackDepth(unsigned char *target, common::DumpImageMode mode
 						{
 							uint64_t * dest64 = reinterpret_cast<uint64_t*>(dest);
 							__m128i source128 = fullBlock[y];
-							*dest64 = _mm_getUint16Max8_soc(source128);
+							*dest64 = applyToneMapping(source128, mode);
 						}
 						continue;
 					}
@@ -2199,7 +3002,7 @@ bool Rasterizer::readBackDepth(unsigned char *target, common::DumpImageMode mode
 									int count = (int)(dest64 - targetRoot);
 									blockData = CompareWithExtraBuffer(blockData, extraRoot[count]);
 								}
-								*dest64 = _mm_getUint16Max8_soc(blockData);
+								*dest64 = applyToneMapping(blockData, mode);
 
 							}							
 						}
@@ -2223,7 +3026,7 @@ bool Rasterizer::readBackDepth(unsigned char *target, common::DumpImageMode mode
 										int count = (int)(dest64 - targetRoot);
 										blockData = CompareWithExtraBuffer(blockData, extraRoot[count]);
 									}
-									*dest64 = _mm_getUint16Max8_soc(blockData);
+									*dest64 = applyToneMapping(blockData, mode);
 								}
 							}
 							else {
@@ -2232,18 +3035,13 @@ bool Rasterizer::readBackDepth(unsigned char *target, common::DumpImageMode mode
 									uint64_t * dest64 = reinterpret_cast<uint64_t*>(dest);
 									__m128i blockData = fullBlock[y>>1];
 
-									if (SupportDepthTill65K)
-									{
-										blockData = _mm_srli_epi32(blockData, 1);
-										blockData = _mm_or_si128(blockData,  _mm_set1_epi32(0x80008000));
-									}
 
 									if (mergeBuffer)
 									{
 										int count = (int)(dest64 - targetRoot);
 										blockData = CompareWithExtraBuffer(blockData, extraRoot[count]);
 									}
-									*dest64 = _mm_getUint16Max8_soc(blockData);
+									*dest64 = applyToneMapping(blockData, mode);
 								}
 							}
 											
@@ -2322,17 +3120,6 @@ bool Rasterizer::readBackDepth(unsigned char *target, common::DumpImageMode mode
 	return true;
 }
 
-////////not used at the moment
-float decompressFloat(uint16_t depth)
-{
-    const float bias = 3.9623753e+28f; // 1.0f / floatCompressionBias
-
-    union {
-        uint32_t u;
-        float f;
-    } U = {uint32_t(depth) << 12};
-    return U.f * bias;
-}
 
 static void normalizeEdge(__m128 &nx, __m128 &ny, __m128 &invLen)
 {
@@ -2347,33 +3134,8 @@ static void normalizeEdge(__m128 &nx, __m128 &ny, __m128 &invLen)
 static __m128i quantizeSlopeLookup(__m128 nx, __m128 ny)
 {
 	__m128i yNeg2 = _mm_castps_si128(ny);
-	auto yNegI2 = _mm_srli_epi32(yNeg2, 31 - OFFSET_QUANTIZATION_BITS);
-
-
-    ////// Remap [-1, 1] to [0, SLOPE_QUANTIZATION / 2]
-    //constexpr float mul = (SLOPE_QUANTIZATION_FACTOR / 2 - 1) * 0.5f;  //15.5
-    //constexpr float add = mul + 0.5f;                                  //16
-    //__m128i quantizedSlope = _mm_cvttps_epi32(_mm_fmadd_ps_soc(nx, mul, _mm_set1_ps(add)));
-	//10 angle degree for horizontal x
-	//sin(86.25 degree) / (sin(86.25 degree) + cos(86.25 degree))= 0.93848823149
-	//* (15.99) + 16 = 31.0111192627
-	//sin(88.25 degree) / (sin(88.25 degree) + cos(88.25 degree)) 0.97035303345
-	// 15.5+16 = 31
-	//sin(4.25 degree) / (sin(4.25 degree) + cos(4.25 degree)) 0.06917243674
-	//0.06917243674 * (15.5) + 16 = 17.072
-	//__m128i quantizedSlope2 = _mm_cvttps_epi32(_mm_fmadd_ps_soc(nx, 15.5f, _mm_set1_ps(16.0f)));
-
-
-	//16.0f / 15.5f = 1.03225806452
-	//5.87747175411e-39/5.6938007618e-39  = 1.03225806452
-	//2.93873587706e-39/2.8469003809e-39
-	//__m128i quantizedSlope = _mm_castps_si128(_mm_fmadd_ps_soc(nx, 2.8469003809e-39, _mm_set1_ps(2.93873587706e-39)));
-	//quantizedSlope = _mm_srli_epi32(quantizedSlope, 17);
-//	auto q2 = _mm_slli_epi32(quantizedSlope, OFFSET_QUANTIZATION_BITS + 1);
- //   return _mm_or_si128(q2, yNegI2);
-
-
-
+	//auto yNegI2 = _mm_slli_epi32(_mm_srli_epi32(yNeg2, 31), OFFSET_QUANTIZATION_BITS);
+	auto yNegI2 = _mm_srli_epi32(yNeg2, 31- OFFSET_QUANTIZATION_BITS);
 
 	if (ARMV7)
 	{
@@ -2394,8 +3156,6 @@ static __m128i quantizeSlopeLookup(__m128 nx, __m128 ny)
 		auto q2 = _mm_slli_epi32(quantizedSlope, OFFSET_QUANTIZATION_BITS + 1);
 		return _mm_and_si128(_mm_or_si128(q2, yNegI2), _mm_set1_epi32(4032));
 	}
-
-
 }
 
 
@@ -2957,33 +3717,52 @@ void Rasterizer::precomputeRasterizationTable()
 }
 
 
-void Rasterizer::doRasterize(common::OccluderMesh& raw)
+void Rasterizer::doRasterize(common::OccluderMesh& raw, OccluderRenderCache* occluderCache)
 {
-		int key = (int)this->mOccluderCache.NeedsClipping << 1;  //2
+		int key = (int)occluderCache->NeedsClipping << 1;  //2
 		key |= (int)(raw.Indices == nullptr);                    //1
 		key |=  raw.EnableBackface << 3; //8
 		key |= raw.SuperCompress << 2;  // raw.Indices must be false  //4,   remove case of 4 6 12 14
+		key |= raw.IsOccludee << 4;
 
-
+		occluderCache->OccludeeMesh = (bool)raw.IsOccludee;
 		switch (key)
 		{
-		case 0: rasterize<0>(raw); break;
-		case 1: rasterize<1>(raw); break;
-		case 2: rasterize<2>(raw); break;
-		case 3: rasterize<3>(raw); break;
+		case 0: rasterize<0>(raw, occluderCache); break;
+		case 1: rasterize<1>(raw, occluderCache); break;
+		case 2: rasterize<2>(raw, occluderCache); break;
+		case 3: rasterize<3>(raw, occluderCache); break;
 		//case 4: rasterize<4>(raw); break;
-		case 5: rasterize<5>(raw); break;
+		case 5: rasterize<5>(raw, occluderCache); break;
 		//case 6: rasterize<6>(raw); break;
-		case 7: rasterize<7>(raw); break;
-		case 8: rasterize<8>(raw); break;
-		case 9: rasterize<9>(raw); break;
-		case 10: rasterize<10>(raw); break;
-		case 11: rasterize<11>(raw); break;
+		case 7: rasterize<7>(raw, occluderCache); break;
+		case 8: rasterize<8>(raw, occluderCache); break;
+		case 9: rasterize<9>(raw, occluderCache); break;
+		case 10: rasterize<10>(raw, occluderCache); break;
+		case 11: rasterize<11>(raw, occluderCache); break;
 		//case 12: rasterize<12>(raw); break;
-		case 13: rasterize<13>(raw); break;
+		case 13: rasterize<13>(raw, occluderCache); break;
 		//case 14: rasterize<14>(raw); break;
-		case 15: rasterize<15>(raw); break;
+		case 15: rasterize<15>(raw, occluderCache); break;
 
+
+
+		case 16: rasterize<16>(raw, occluderCache); break;
+		case 17: rasterize<17>(raw, occluderCache); break;
+		case 18: rasterize<18>(raw, occluderCache); break;
+		case 19: rasterize<19>(raw, occluderCache); break;
+			//case 4: rasterize<4>(raw); break;
+		case 21: rasterize<21>(raw, occluderCache); break;
+			//case 6: rasterize<6>(raw); break;
+		case 23: rasterize<23>(raw, occluderCache); break;
+		case 24: rasterize<24>(raw, occluderCache); break;
+		case 25: rasterize<25>(raw, occluderCache); break;
+		case 26: rasterize<26>(raw, occluderCache); break;
+		case 27: rasterize<27>(raw, occluderCache); break;
+			//case 12: rasterize<12>(raw); break;
+		case 29: rasterize<29>(raw, occluderCache); break;
+			//case 14: rasterize<14>(raw); break;
+		case 31: rasterize<31>(raw, occluderCache); break;
 
 		default:
 			break;
@@ -3026,14 +3805,12 @@ static int GetValidPrimitiveNum(__m128 primitiveValid)
 }
 
 
-static inline __m128 _mm_rcp_ps_div(__m128 _A) {
-	return _mm_div_ps(_mm_set1_ps(1.0), _A);
-}
 //draw convex quad, bPixelAABBClippingQuad is always TRUE for correctness
-template <bool bPixelAABBClippingQuad>
-void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128 primitiveValid, __m128* edgeNormalsX, __m128* edgeNormalsY, __m128* areas)
+template <bool bPixelAABBClippingQuad, bool bDrawOccludee>
+void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128 primitiveValid, __m128* edgeNormalsX, __m128* edgeNormalsY, __m128* areas, OccluderRenderCache* occluderCache)
 {
-
+	if (bDrawOccludee && bSplitQuadToTriangleForOccludee) return;
+	PrimitiveBoundaryClipCache* PrimitivePixelClip = &occluderCache->mPixelClip;
 	__m128 minFx, minFy, maxFx, maxFy;
 
 	
@@ -3056,6 +3833,10 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 	
 	// Check overlap between bounding box and frustum
 	__m128 isInFrustum = _mm_castsi128_ps(_mm_and_si128(_mm_cmple_epi32_soc(bounds[0], bounds[1]), _mm_cmple_epi32_soc(bounds[2], bounds[3])));
+	__m128 one16 = _mm_set1_ps(1.0 / 16.0);
+	isInFrustum = _mm_and_ps(isInFrustum, _mm_cmpge_ps(maxFx, one16));
+	isInFrustum = _mm_and_ps(isInFrustum, _mm_cmpge_ps(maxFy, one16));
+
 	primitiveValid = _mm_and_ps(isInFrustum, primitiveValid);
 
 	if (DebugOccluderOccludee)
@@ -3082,8 +3863,8 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 
 	// Compute Z from linear relation with 1/W
 	__m128 z[4];
-	__m128 c0 = mOccluderCache.c0;
-	__m128 c1 = mOccluderCache.c1;
+	__m128 c0 = occluderCache->c0;
+	__m128 c1 = occluderCache->c1;
 	z[0] = _mm_fmadd_ps(invW[0], c1, c0);
 	z[1] = _mm_fmadd_ps(invW[1], c1, c0);
 	z[2] = _mm_fmadd_ps(invW[2], c1, c0);
@@ -3091,9 +3872,12 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 
 	__m128 maxZ = _mm_max_ps(_mm_max_ps(z[0], z[1]), _mm_max_ps(z[2], z[3]));
 
-	__m128i maxZi = PackPositiveBatchZ(maxZ);
+	__m128i maxZi = _mm_srai_epi32(_mm_castps_si128(maxZ), 12); 
 
-	uint32_t*depthBounds = (uint32_t*)&maxZi;
+	__m128 maxArea = _mm_max_ps(areas[1], areas[0]);
+
+	maxZi = _mm_min_epu32(maxZi, _mm_set1_epi32(65535));
+	uint32_t* depthBounds = (uint32_t*)&maxZi;
 
 	//we could use hiZ to do a quick culling. 
 
@@ -3151,7 +3935,9 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 
 						// Load HiZ for 8 blocks at once - note we're possibly reading out-of-bounds here; but it doesn't affect correctness if we test more blocks than actually covered
 						__m128i hiZblob = _mm_loadu_si128(reinterpret_cast<const __m128i *>(pBlockRowHiZ));
-						__m128i cmpResult = _mm_cmplt_epu16_soc(hiZblob, primitiveMaxZVi);
+						__m128i cmpResult;
+						if (bDrawOccludee)	cmpResult = _mm_cmple_epu16_soc(hiZblob, primitiveMaxZVi);
+						else 				cmpResult = _mm_cmplt_epu16_soc(hiZblob, primitiveMaxZVi);
 						uint64_t * r64 = (uint64_t *)& cmpResult;
 						uint64_t result = r64[0] & r64[1];
 
@@ -3162,8 +3948,7 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 							int32_t offset = byteBlockCheck & 3;
 							r64[bit] <<= (3 ^ offset) << 4;
 
-							uint64_t mask1 = -bit;
-							r64[1] &= mask1;
+							r64[1] &= (uint64_t)(-bit);
 
 
 							result = r64[0] | r64[1];
@@ -3210,6 +3995,17 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 			validMask = mAliveIdxMask[alivePrimitive];
 	}
 
+
+	__m128i minZi;
+	uint32_t* depthBoundsMin;
+	{
+		__m128 minZ = _mm_min_ps(_mm_min_ps(z[0], z[1]), _mm_min_ps(z[2], z[3]));// _mm_fmadd_ps(_mm_min_ps(_mm_min_ps(_mm_min_ps(invW[0], invW[1]), invW[2]), invW[3]), occluderCache->c1, occluderCache->c0);
+		minZ = _mm_and_ps(minZ, _mm_cmpgt_ps(minZ, _mm_setzero_ps()));
+		minZi = _mm_castps_si128(minZ);
+		depthBoundsMin = (uint32_t*)&minZi;
+	}
+
+
 	if (bPixelAABBClippingQuad)
 	{
 		auto scale8 = _mm_set1_ps(8);
@@ -3218,35 +4014,29 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 		__m128i pixel = _mm_cvttps_epi32(_mm_mul_ps(minFx, scale8));
 		//make bit 16~31 store block value for each int component
 		//make bit 0~15 store block pixel remainder(0~7)
-		mPrimitiveBoundaryClip->PrimitivePixelBounds[0] = _mm_and_si128(mask, _mm_or_si128(_mm_slli_epi32(pixel, 13), pixel));
+		PrimitivePixelClip->PrimitivePixelBounds[0] = _mm_and_si128(mask, _mm_or_si128(_mm_slli_epi32(pixel, 13), pixel));
 		pixel = _mm_cvttps_epi32(_mm_mul_ps(maxFx, scale8));
-		mPrimitiveBoundaryClip->PrimitivePixelBounds[1] = _mm_and_si128(mask, _mm_or_si128(_mm_slli_epi32(pixel, 13), pixel));
+		PrimitivePixelClip->PrimitivePixelBounds[1] = _mm_and_si128(mask, _mm_or_si128(_mm_slli_epi32(pixel, 13), pixel));
 		pixel = _mm_cvttps_epi32(_mm_mul_ps(minFy, scale8));
-		mPrimitiveBoundaryClip->PrimitivePixelBounds[2] = _mm_and_si128(mask, _mm_or_si128(_mm_slli_epi32(pixel, 13), pixel));
+		PrimitivePixelClip->PrimitivePixelBounds[2] = _mm_and_si128(mask, _mm_or_si128(_mm_slli_epi32(pixel, 13), pixel));
 		pixel = _mm_cvttps_epi32(_mm_mul_ps(maxFy, scale8));
-		mPrimitiveBoundaryClip->PrimitivePixelBounds[3] = _mm_and_si128(mask, _mm_or_si128(_mm_slli_epi32(pixel, 13), pixel));
+		PrimitivePixelClip->PrimitivePixelBounds[3] = _mm_and_si128(mask, _mm_or_si128(_mm_slli_epi32(pixel, 13), pixel));
 	}
 
-	if (this->mDebugRenderMode) {
-		HandleDrawMode<4>(x, y, z, validMask);
+	if (this->mDebugRenderMode && bDrawOccludee == false){
+		HandleDrawMode<4>(x, y, z, validMask, occluderCache);
 	}
 
 	if (DebugOccluderOccludee)
 	{
 		DebugData[P4EarlyHizCullPass] ++;
-	}
-
-
-	if (DebugOccluderOccludee)
-	{
 		this->DebugData[BatchQuad4Rasterized]++;
 	}
 
 
 	// Compute screen space depth plane
-	__m128 depthPlane[4];
+	__m128 depthPlane[3];
 
-	__m128 maxArea = _mm_max_ps(areas[1], areas[0]);
 	__m128 greaterArea = _mm_cmpeq_ps(maxArea, areas[1]);
 
 	__m128 invArea = _mm_rcp_ps_div(maxArea);
@@ -3264,35 +4054,45 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 	__m128 edgeNormalsX4 = _mm_sub_ps(y[0], y[2]);
 	__m128 edgeNormalsY4 = _mm_sub_ps(x[2], x[0]);
 
-
-	// Depth delta X/Y - select the derivatives from the triangle with the greater area, which is numerically more stable
-	depthPlane[1] = _mm_mul_ps(invArea,
-		_mm_blendv_ps(
-			_mm_fmsub_ps(z20, edgeNormalsX[1], _mm_mul_ps(z12, edgeNormalsX4)),
-			_mm_fnmadd_ps(z20, edgeNormalsX[3], _mm_mul_ps(z30, edgeNormalsX4)),
-			greaterArea));
-	depthPlane[2] = _mm_mul_ps(invArea,
-		_mm_blendv_ps(
-			_mm_fmsub_ps(z20, edgeNormalsY[1], _mm_mul_ps(z12, edgeNormalsY4)),
-			_mm_fnmadd_ps(z20, edgeNormalsY[3], _mm_mul_ps(z30, edgeNormalsY4)),
-			greaterArea));
+	if (bDrawOccludee) {
+		auto a1 = _mm_mul_ps(areas[0], _mm_fmsub_ps(z20, edgeNormalsX[1], _mm_mul_ps(z12, edgeNormalsX4)));
+		auto a2 = _mm_mul_ps(areas[0], _mm_fmsub_ps(z20, edgeNormalsY[1], _mm_mul_ps(z12, edgeNormalsY4)));
+		auto d1 = _mm_mul_ps(areas[1], _mm_fnmadd_ps(z20, edgeNormalsX[3], _mm_mul_ps(z30, edgeNormalsX4)));
+		auto d2 = _mm_mul_ps(areas[1], _mm_fnmadd_ps(z20, edgeNormalsY[3], _mm_mul_ps(z30, edgeNormalsY4)));
 
 
+		auto a = _mm_sub_ps(z[0], _mm_fmadd_ps(x[0], a1, _mm_mul_ps(y[0], a2)));
+		auto b = _mm_sub_ps(z[1], _mm_fmadd_ps(x[1], a1, _mm_mul_ps(y[1], a2)));
+		auto c = _mm_sub_ps(z[2], _mm_fmadd_ps(x[2], d1, _mm_mul_ps(y[2], d2)));
+		auto d = _mm_sub_ps(z[3], _mm_fmadd_ps(x[3], d1, _mm_mul_ps(y[3], d2)));
 
+		depthPlane[0] = _mm_max_ps(_mm_max_ps(a, b), _mm_max_ps(c, d));
 
-	if (bDepthAtCenterOptimization == false)
-	{
-		// Depth at center of first pixel
-		auto one16 = _mm_set1_ps(1.0f / 16.0f); //load into register once
-		__m128 refX = _mm_sub_ps(one16, x[0]);
-		__m128 refY = _mm_sub_ps(one16, y[0]);
-		depthPlane[0] = _mm_fmadd_ps(refX, depthPlane[1], _mm_fmadd_ps(refY, depthPlane[2], z[0]));
+		depthPlane[1] = _mm_max_ps(a1, d1);
+		depthPlane[2] = _mm_max_ps(a2, d2);
 	}
 	else
 	{
-		// Depth at center of first pixel. Optimization. Save One _mm_sub_ps X horizontally
-		//allow vertical half pixel error. This would save 1 _mm_sub_ps Y vertically and avoid load 1/16 into memory
-		depthPlane[0] = _mm_sub_ps(z[0], _mm_fmadd_ps(x[0], depthPlane[1], _mm_mul_ps(y[0], depthPlane[2])));
+		// Depth delta X/Y - select the derivatives from the triangle with the greater area, which is numerically more stable
+		depthPlane[1] = _mm_mul_ps(invArea,
+			_mm_blendv_ps(
+				_mm_fmsub_ps(z20, edgeNormalsX[1], _mm_mul_ps(z12, edgeNormalsX4)),
+				_mm_fnmadd_ps(z20, edgeNormalsX[3], _mm_mul_ps(z30, edgeNormalsX4)),
+				greaterArea));
+		depthPlane[2] = _mm_mul_ps(invArea,
+			_mm_blendv_ps(
+				_mm_fmsub_ps(z20, edgeNormalsY[1], _mm_mul_ps(z12, edgeNormalsY4)),
+				_mm_fnmadd_ps(z20, edgeNormalsY[3], _mm_mul_ps(z30, edgeNormalsY4)),
+				greaterArea));
+
+
+
+
+		
+		// Depth at center of first pixel
+		__m128 refX = _mm_sub_ps(_mm_set1_ps(1.0f / 16.0f), x[0]);
+		__m128 refY = _mm_sub_ps(_mm_set1_ps(1.0f / 16.0f), y[0]);
+		depthPlane[0] = _mm_fmadd_ps(refX, depthPlane[1], _mm_fmadd_ps(refY, depthPlane[2], z[0]));
 	}
 
 
@@ -3316,37 +4116,30 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 	// Fetch data pointers since we'll manually strength-reduce memory arithmetic
 	uint16_t *pHiZBuffer = m_pHiz;
 
-
 	do
 	{
 		uint32_t primitiveIdx = validMask & 3;
 		validMask >>= 2;
-	
+
 		if (DebugOccluderOccludee)
 		{
 			this->DebugData[PrimitiveRasterizedQuadNum] ++;
 		}
 
 		uint32_t* slopeLookup = ((uint32_t*)&slopeLookups) + primitiveIdx;	
-
 		const uint64_t* pRow0 = m_pMaskTable + slopeLookup[0];
 		const uint64_t* pRow1 = m_pMaskTable + slopeLookup[4];
 		const uint64_t* pRow2 = m_pMaskTable + slopeLookup[8];
 		const uint64_t* pRow3 = m_pMaskTable + slopeLookup[12];
-
+		
 
 		// Extract and prepare per-primitive data
 		uint32_t primitiveMaxZf = depthBounds[primitiveIdx];
 		uint16_t primitiveMaxZ = (uint16_t)primitiveMaxZf;
+		uint32_t primitiveMinZf = depthBoundsMin[primitiveIdx];
 
-		if (SupportDepthTill65K) {
-			primitiveMaxZf |= 65536;
-			primitiveMaxZf <<= 11;
-		}
-		else {
-			primitiveMaxZf <<= 12;
-		}
-
+		
+		primitiveMaxZf <<= 12;
 		float* depthPlaneData = ((float*)depthPlane) + primitiveIdx;
 
 
@@ -3373,11 +4166,7 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 		__m128 depthLeftBase;
 		if (VRS_X4Y4_Optimzation)
 		{
-			//0.0f, 0.125f, 0.25f, 0.375f, 0.5f, 0.625,
-			if (depthPlaneData[4] > 0)
-				depthLeftBase = _mm_fmadd_ps(depthDx, _mm_setr_ps(0, .5f, 00, 0.5f), _mm_set1_ps(depthPlaneData[0]));
-			else
-				depthLeftBase = _mm_fmadd_ps(depthDx, _mm_setr_ps(0.375f, 0.875f, 0.375f, 0.875f), _mm_set1_ps(depthPlaneData[0]));
+			depthLeftBase = _mm_fmadd_ps(depthDx, xFactors[xIncrease], _mm_set1_ps(depthPlaneData[0]));
 			float halfSlope = slope * 0.5f;
 			depthLeftBase = _mm_add_ps(depthLeftBase, _mm_setr_ps(0, 0, halfSlope, halfSlope));
 		}
@@ -3427,7 +4216,7 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 		
 		if (bPixelAABBClippingQuad)
 		{
-			mPrimitiveBoundaryClip->UpdatePixelAABBData(primitiveIdx);
+			PrimitivePixelClip->UpdatePixelAABBData(primitiveIdx, mPixelBound);
 		}
 		if (DebugOccluderOccludee) {
 			DebugData[BlockTotalPrimitives]++;
@@ -3451,9 +4240,9 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 				__m128i lookup = _mm_cvttps_epi32(offset);
 
 				lookup = _mm_max_epi32(lookup, _mm_setzero_si128());
+				uint32_t* lookIdx = (uint32_t*)&lookup;
+				uint32_t idxOr = lookIdx[0] | lookIdx[1] | lookIdx[2] | lookIdx[3];
 
-				int32_t * lookIdx = (int32_t *)&lookup;
-				int32_t idxOr = lookIdx[0] | lookIdx[1] | lookIdx[2] | lookIdx[3];
 				if (idxOr > 63)
 				{	
 					//Convex Optimization 0: YesNo optimization. Stop if Block state from see to not see
@@ -3495,6 +4284,11 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 					}
 				}
 
+				if (bDumpBlockColumnImage)
+				{
+					if (blockX == DebugDumpBlockX && blockY == DebugDumpBlockY) {}
+					else	continue;
+				}
 				
 
 				//drawQuad routine
@@ -3502,14 +4296,22 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 				{
 					__m128i rowDepthLeft = _mm_castps_si128(_mm_fmadd_ps(depthDx, _mm_set1_ps((float)blockX), rowDepthLeftBtm));
 
-					rowDepthLeft = _mm_max_epi32(rowDepthLeft, _mm_set1_epi32(MIN_PIXEL_DEPTH_FLOAT_INT));
+					rowDepthLeft = _mm_max_epi32(rowDepthLeft, _mm_set1_epi32(primitiveMinZf));
 					rowDepthLeft = _mm_min_epi32(rowDepthLeft, _mm_set1_epi32(primitiveMaxZf));
 
 
 					__m128i depthData = packDepthPremultipliedVRS12Fast(rowDepthLeft);
+					
 					uint16_t * depth16 = (uint16_t*)&depthData;
 
 					uint16_t maxBlockDepth = depth16[maxBlockIdx];
+					if (bDebug_ValidateMinMaxBlockIdx) {
+						uint16_t minDepth = depth16[minBlockIdx];
+						for (int xx = 0; xx < 8; xx++) {
+							assert(depth16[xx] <= maxBlockDepth);
+							assert(depth16[xx] >= minDepth);
+						}
+					}
 					if (maxBlockDepth > pBlockRowHiZ[0])
 					{
 						uint64_t *outBlockData = outblockRowData + blockX * PairBlockNum;
@@ -3517,12 +4319,12 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 						uint32_t * depth32 = (uint32_t*)depth16;
 						if (PairBlockNum <= CheckerBoardVizMaskApproach)
 						{
-							if (blockMask != -1) 
+							if (blockMask != -1)
 							{
 
 								if (bPixelAABBClippingQuad)
 								{
-									blockMask &= mPrimitiveBoundaryClip->GetPixelAABBMask(blockX, blockY);
+									blockMask &= PrimitivePixelClip->GetPixelAABBMask(blockX, blockY);
 									if (blockMask == 0)
 									{
 										if (DebugOccluderOccludee)
@@ -3542,15 +4344,28 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 								if (PairBlockNum == PureCheckerBoardApproach)
 								{
 									__m128i* out = (__m128i*)outBlockData;
-									updateBlockMSCBPartial(depth32, blockMask, out, nullptr, pBlockRowHiZ, maxBlockDepth);
+									if (bDrawOccludee && Rasterize_ClippedOccludee_AS_OCCLUDER && !bDrawOccludeeToDepthMap) {
+										updateBlockMSCBPartial_Occludee(depth32, blockMask, out, occluderCache);
+										if (occluderCache->mRasterizedOccludeeVisible)
+											return;
+									}
+									else {
+										updateBlockMSCBPartial(depth32, blockMask, out, nullptr, pBlockRowHiZ, maxBlockDepth);
+									}
 								}
 								else {
 									int bit = blockX & 1;
 									__m128i* out = GetDepthData(outBlockData, bit);
 									uint64_t* maskData = GetMaskData(outBlockData, bit);
 
-
-									updateBlockMSCBPartial(depth32, blockMask, out, maskData, pBlockRowHiZ, maxBlockDepth);
+									if (bDrawOccludee && Rasterize_ClippedOccludee_AS_OCCLUDER && !bDrawOccludeeToDepthMap) {
+										updateBlockMSCBPartial_Occludee(depth32, blockMask, out, occluderCache);
+										if (occluderCache->mRasterizedOccludeeVisible)
+											return;
+									}
+									else {
+										updateBlockMSCBPartial(depth32, blockMask, out, maskData, pBlockRowHiZ, maxBlockDepth);
+									}
 								}
 							}
 							else //full block update
@@ -3583,6 +4398,11 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 								uint16_t * pBlockRowHiZMax = pBlockRowHiZ + m_HizBufferSize;
 								if (minBlockDepth >= pBlockRowHiZMax[0]) //full block update, min is larger than exist max
 								{
+									if (bDrawOccludee && Rasterize_ClippedOccludee_AS_OCCLUDER && !bDrawOccludeeToDepthMap) {
+										occluderCache->mRasterizedOccludeeVisible = true;
+										return;
+									}
+
 									if (DebugOccluderOccludee) {
 										DebugData[BlockRenderInitial]++;
 										DebugData[BlockRenderInitialFull]++;
@@ -3602,14 +4422,26 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 								{
 									__m128i	depthBottom = _mm_setr_epi32(depth32[0], depth32[0], depth32[1], depth32[1]);
 									__m128i depthTop = _mm_setr_epi32(depth32[2], depth32[2], depth32[3], depth32[3]);
-									out[0] = _mm_max_epu16(out[0], depthBottom);
-									out[1] = _mm_max_epu16(out[1], depthBottom);
-									out[2] = _mm_max_epu16(out[2], depthTop);
-									out[3] = _mm_max_epu16(out[3], depthTop);
+									if (bDrawOccludee && Rasterize_ClippedOccludee_AS_OCCLUDER && !bDrawOccludeeToDepthMap) {
+										__m128i visible = _mm_cmple_epu16_soc(out[0], depthBottom);
+										visible = _mm_or_si128(visible, _mm_cmple_epu16_soc(out[1], depthBottom));
+										visible = _mm_or_si128(visible, _mm_cmple_epu16_soc(out[2], depthTop));
+										visible = _mm_or_si128(visible, _mm_cmple_epu16_soc(out[3], depthTop));
+										if (_mm_anybit_one_soc(visible)) {
+											occluderCache->mRasterizedOccludeeVisible = true;
+											return;
+										}
+									}
+									else {
+										out[0] = _mm_max_epu16(out[0], depthBottom);
+										out[1] = _mm_max_epu16(out[1], depthBottom);
+										out[2] = _mm_max_epu16(out[2], depthTop);
+										out[3] = _mm_max_epu16(out[3], depthTop);
 
 
-									pBlockRowHiZ[0] = std::max<uint16_t>(minBlockDepth, pBlockRowHiZ[0]);
-									pBlockRowHiZMax[0] = std::max<uint16_t>(maxBlockDepth, pBlockRowHiZMax[0]);
+										pBlockRowHiZ[0] = std::max<uint16_t>(minBlockDepth, pBlockRowHiZ[0]);
+										pBlockRowHiZMax[0] = std::max<uint16_t>(maxBlockDepth, pBlockRowHiZMax[0]);
+									}
 								}
 							}
 						}
@@ -3619,13 +4451,22 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 							if (bPixelAABBClippingQuad) {
 								if (blockMask != -1 && bPixelAABBClipping)
 								{
-									blockMask &= mPrimitiveBoundaryClip->GetPixelAABBMask(blockX, blockY);
+									blockMask &= PrimitivePixelClip->GetPixelAABBMask(blockX, blockY);
 								}
 							}
 							__m128i depthRows[2];
 							depthRows[0] = _mm_setr_epi32(depth32[0], depth32[0], depth32[1], depth32[1]);
 							depthRows[1] = _mm_setr_epi32(depth32[2], depth32[2], depth32[3], depth32[3]);
-							updateBlock(depthRows, blockMask, (__m128i*)(outBlockData), pBlockRowHiZ);
+							if (bDrawOccludee && Rasterize_ClippedOccludee_AS_OCCLUDER && !bDrawOccludeeToDepthMap) {
+								occluderCache->mRasterizedOccludeeVisible = updateBlock_Occludee(depthRows, blockMask, (__m128i*)(outBlockData), pBlockRowHiZ);
+								if (occluderCache->mRasterizedOccludeeVisible)
+								{
+									return;
+								}
+							}
+							else {
+								updateBlock(depthRows, blockMask, (__m128i*)(outBlockData), pBlockRowHiZ);
+							}
 #endif
 						}
 					}
@@ -3658,7 +4499,7 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 
 					if (blockMask != -1 && bPixelAABBClippingQuad)
 					{
-						blockMask &= mPrimitiveBoundaryClip->GetPixelAABBMask(blockX, blockY);
+						blockMask &= PrimitivePixelClip->GetPixelAABBMask(blockX, blockY);
 					}
 
 					__m128 depthRowDelta = _mm_set1_ps(slope * 0.125f);
@@ -3688,14 +4529,20 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 
 
 template <int RASTERIZE_CONFIG>
-void Rasterizer::rasterize(common::OccluderMesh& raw)
+void Rasterizer::rasterize(common::OccluderMesh& raw, OccluderRenderCache* occluderCache)
 {
 	constexpr bool PrimitiveDataCompressed = RASTERIZE_CONFIG & 1;
-	constexpr bool possiblyNearClipped = RASTERIZE_CONFIG & 2;
-	constexpr bool bBackFaceCulling = (RASTERIZE_CONFIG & 8);
-	constexpr bool bPlanarMesh = false;
-	constexpr bool bSuperCompressed = RASTERIZE_CONFIG & 4;
-	
+	constexpr bool possiblyNearClipped = (bool)(RASTERIZE_CONFIG & 2);
+	constexpr bool bBackFaceCulling =  (bool)(RASTERIZE_CONFIG & 8) && !bDebugForceBackfaceCullingOFF;
+	constexpr bool bSuperCompressed = (bool)(RASTERIZE_CONFIG & 4);
+
+
+	constexpr bool bDrawOccludee = (bool)(RASTERIZE_CONFIG & 16);
+
+	if (bDrawOccludee && !Rasterize_ClippedOccludee_AS_OCCLUDER) {
+		return;
+	}
+	if (!bDrawOccludee && bDrawOccludeeToDepthMap) return;
 
 	if (DebugOccluderOccludee) {
 		DebugData[OccluderRasterized] ++;
@@ -3707,15 +4554,10 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 		DebugData[RasterizedOccluderTotalVertices] += raw.VerticesNum;
 	}
 
-	__m128 * mat = mOccluderCache.mat;
-	if (PrimitiveDataCompressed)
-	{
-		auto scale = _mm_set1_ps(1.0f / 65535.0f);
-		mat[0] = _mm_mul_ps(mat[0], scale);
-		mat[1] = _mm_mul_ps(mat[1], scale);
-		mat[2] = _mm_mul_ps(mat[2], scale);
-	}
+	__m128 * mat = occluderCache->mat;
 
+
+	float* matF = (float*)mat;
 
 	if (bFastSetUpMatOp == false) {
 		// *****_MM_TRANSPOSE4_PS*****
@@ -3733,9 +4575,8 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 		__m128 zero_mask = _mm_cmpneq_ps(Wa, Wb);
 		c0 = _mm_and_ps(c0, zero_mask);
 
-		mOccluderCache.c1 = _mm_fnmadd_ps(c0, Wa, Za);
-		mOccluderCache.NegativeC1 = _mm_negate_ps_soc(mOccluderCache.c1);
-		mOccluderCache.c0 = c0;
+		occluderCache->c1 = _mm_fnmadd_ps(c0, Wa, Za);
+		occluderCache->c0 = c0;
 
 
 		auto one8th = _mm_set1_ps(0.125f);
@@ -3746,7 +4587,6 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 	}
 	else 
 	{
-		float* matF = (float*)mat;
 		__m128 matT0 = _mm_setr_ps(matF[0], matF[4], matF[8], matF[12]);
 		__m128 matT1 = _mm_setr_ps(matF[1], matF[4 + 1], matF[8 + 1], matF[12 + 1]);
 		__m128 matT3 = _mm_setr_ps(matF[3], matF[4 + 3], matF[8 + 3], matF[12 + 3]);
@@ -3754,9 +4594,8 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 		float za_bf = matF[0 * 4 + 2] + matF[1 * 4 + 2] + matF[2 * 4 + 2];
 		if (za_bf == 0) //most of Occluders should have no scale which means only R|T
 		{
-			mOccluderCache.c1 = _mm_set1_ps(matF[3 * 4 + 2]);// _mm_shuffle_ps_single_index(mat[2], 3);
-			mOccluderCache.NegativeC1 = _mm_set1_ps(-matF[3 * 4 + 2]);
-			mOccluderCache.c0 = _mm_set1_ps(0);
+			occluderCache->c1 = _mm_set1_ps(matF[3 * 4 + 2]);// _mm_shuffle_ps_single_index(mat[2], 3);
+			occluderCache->c0 = _mm_set1_ps(0);
 		}
 		else
 		{
@@ -3774,9 +4613,8 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 			__m128 zero_mask = _mm_cmpneq_ps(Wa_b, _mm_setzero_ps());
 			c0 = _mm_and_ps(c0, zero_mask);
 
-			mOccluderCache.c1 = _mm_fnmadd_ps(c0, Wa, Za);
-			mOccluderCache.c0 = c0;
-			mOccluderCache.NegativeC1 = _mm_negate_ps_soc(mOccluderCache.c1);
+			occluderCache->c1 = _mm_fnmadd_ps(c0, Wa, Za);
+			occluderCache->c0 = c0;
 		}
 
 
@@ -3788,58 +4626,57 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 	}
 
 	// *****_MM_SHUFFLE*****
-	__m128 mat33;// = _mm_shuffle_ps_single_index(mOccluderCache.mat[3], 3);
-	__m128 mat03;// = _mm_shuffle_ps_single_index(mOccluderCache.mat[0], 3);
-	__m128 mat13;// = _mm_shuffle_ps_single_index(mOccluderCache.mat[1], 3);
+	__m128 mat33;// = _mm_shuffle_ps_single_index(occluderCache->mat[3], 3);
+	__m128 mat03;// = _mm_shuffle_ps_single_index(occluderCache->mat[0], 3);
+	__m128 mat13;// = _mm_shuffle_ps_single_index(occluderCache->mat[1], 3);
 
 
-	if (PrimitiveDataCompressed == false) 
 	{
-		auto c = mOccluderCache.FullMeshMinusRefMinInvExtents;
-		mat03 = _mm_sum4_ps_soc(_mm_mul_ps(c, mOccluderCache.mat[0]));
-		mat13 = _mm_sum4_ps_soc(_mm_mul_ps(c, mOccluderCache.mat[1]));
-		mat33 = _mm_sum4_ps_soc(_mm_mul_ps(c, mOccluderCache.mat[3]));
+		auto c = occluderCache->FullMeshInvExtents[1];
+		mat03 = _mm_sum4_ps_soc(_mm_mul_ps(c, mat[0]));
+		mat13 = _mm_sum4_ps_soc(_mm_mul_ps(c, mat[1]));
+		mat33 = _mm_sum4_ps_soc(_mm_mul_ps(c, mat[3]));
 		
 		///Xf0 = _mm_fmadd_ps(dataArray[0], b, c);
-		__m128 b = mOccluderCache.FullMeshInvExtents;
-		mOccluderCache.mat[0] = _mm_mul_ps(mOccluderCache.mat[0], b);
-		mOccluderCache.mat[1] = _mm_mul_ps(mOccluderCache.mat[1], b);
-		mOccluderCache.mat[3] = _mm_mul_ps(mOccluderCache.mat[3], b);				
+		__m128 b = occluderCache->FullMeshInvExtents[0];
+		mat[0] = _mm_mul_ps(mat[0], b);
+		mat[1] = _mm_mul_ps(mat[1], b);
+		mat[3] = _mm_mul_ps(mat[3], b);				
 	}
-	else 
-	{
-		mat03 = _mm_shuffle_ps_single_index(mOccluderCache.mat[0], 3);
-		mat13 = _mm_shuffle_ps_single_index(mOccluderCache.mat[1], 3);
-		mat33 = _mm_shuffle_ps_single_index(mOccluderCache.mat[3], 3);
-	}
-
-
 
 
 	__m128  dataArray[12];
-	const __m128i *vertexData = nullptr;
+
+	__m128* paabbArray = (__m128*)mAABBUnitArray;
+
 	uint8_t * pCompressIndices8 = nullptr;
 	uint16_t * pCompressIndices = nullptr;
-	uint16_t * pCompressVertices = nullptr;
+	float * pCompressVertices = nullptr; //No vertices position compression: to improve accuracy of vertices position, compression float to uint16_t is removed. 
 	if (PrimitiveDataCompressed == true)
 	{
 		if (bSuperCompressed)
 		{
-			pCompressIndices8 = (uint8_t *)raw.Vertices;
-			pCompressVertices = (uint16_t *)(pCompressIndices8 + raw.QuadSafeBatchNum * 16 + raw.TriangleBatchIdxNum * 12);
-		}
-		else if (common::bEnableCompressMode)
-		{
-			pCompressIndices = (uint16_t *)raw.Vertices;
-			pCompressVertices = (uint16_t *)(pCompressIndices +  raw.QuadSafeBatchNum * 16 + raw.TriangleBatchIdxNum * 12);
+			if (raw.AABBMode) {
+				pCompressVertices = (float*)raw.Vertices - 14;
+			}
+			else {
+				pCompressIndices8 = (uint8_t*)raw.Vertices;
+				pCompressVertices = (float*)(pCompressIndices8 + raw.QuadSafeBatchNum * 16 + raw.TriangleBatchIdxNum * 12);
+			}
 		}
 		else
 		{
-			vertexData = (__m128i *) raw.Vertices;
+			pCompressIndices = (uint16_t *)raw.Vertices;
+			pCompressVertices = (float*)(pCompressIndices +  raw.QuadSafeBatchNum * 16 + raw.TriangleBatchIdxNum * 12);
 		}
 	}
 	
-	int flip = this->mClockWise != this->mOccluderCache.FlipOccluderFace;
+	int flip = this->mClockWise != occluderCache->FlipOccluderFace;
+	if (bDrawOccludee) {
+		if (occluderCache->OccludeeMesh == false) {
+			flip = !this->mClockWise;
+		}
+	}
 
 	//swap 0 and 2 in case of flipping
 	int faceIdx0 = flip << 1;
@@ -3852,106 +4689,95 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 		int packetsLeft = raw.QuadSafeBatchNum;
 		float* pData = (float*)dataArray;
 		do {
-			//prepare the 16 tempV
 			if (bSuperCompressed) {
-				uint16_t* a = pCompressVertices + pCompressIndices8[0];
-				uint16_t* b = pCompressVertices + pCompressIndices8[4];
-				uint16_t* c = pCompressVertices + pCompressIndices8[8];
-				uint16_t* d = pCompressVertices + pCompressIndices8[12];
-
-				//dataArray[0] = _mm_setr_ps(a[0], b[0], c[0], d[0]);
-				pData[0] = a[0]; pData[1] = b[0]; pData[2] = c[0]; pData[3] = d[0];
-				//dataArray[4] = _mm_setr_ps(a[1], b[1], c[1], d[1]);
-				pData[16] = a[1]; pData[17] = b[1]; pData[18] = c[1]; pData[19] = d[1];
-				//dataArray[8] = _mm_setr_ps(a[2], b[2], c[2], d[2]);
-				pData[32] = a[2]; pData[33] = b[2]; pData[34] = c[2]; pData[35] = d[2];
+				//prepare the 16 tempV
+				if (raw.AABBMode) {
+					__m128 extend = _mm_set1_ps(pCompressVertices[3]);
+					__m128 min = _mm_set1_ps(pCompressVertices[0]);
+					dataArray[0] = _mm_fmadd_ps(paabbArray[0], extend, min);
+					dataArray[1] = _mm_fmadd_ps(paabbArray[1], extend, min);
+					dataArray[2] = dataArray[1];// _mm_fmadd_ps(paabbArray[2], extend, min);
+					dataArray[3] = _mm_fmadd_ps(paabbArray[2], extend, min);
 
 
+					extend = _mm_set1_ps(pCompressVertices[4]);
+					min = _mm_set1_ps(pCompressVertices[1]);
+					dataArray[4] = _mm_fmadd_ps(paabbArray[3], extend, min);
+					dataArray[5] = _mm_fmadd_ps(paabbArray[4], extend, min);
+					dataArray[6] = _mm_fmadd_ps(paabbArray[5], extend, min);
+					dataArray[7] = _mm_fmadd_ps(paabbArray[6], extend, min);
 
-				a = pCompressVertices + pCompressIndices8[0 + 1];
-				b = pCompressVertices + pCompressIndices8[4 + 1];
-				c = pCompressVertices + pCompressIndices8[8 + 1];
-				d = pCompressVertices + pCompressIndices8[12 + 1];
+					extend = _mm_set1_ps(pCompressVertices[5]);
+					min = _mm_set1_ps(pCompressVertices[2]);
+					dataArray[8] = _mm_fmadd_ps(paabbArray[7], extend, min);
+					dataArray[9] = dataArray[8];// _mm_fmadd_ps(paabbArray[9], extend, min);
+					dataArray[10] = _mm_fmadd_ps(paabbArray[8], extend, min);
+					dataArray[11] = dataArray[10];// _mm_fmadd_ps(paabbArray[11], extend, min);
+					paabbArray += 8;
 
-				// dataArray[3] = _mm_setr_ps(a[0], b[0], c[0], d[0]);
-				pData[0 + 12] = a[0]; pData[1 + 12] = b[0]; pData[2 + 12] = c[0]; pData[3 + 12] = d[0];
-				//dataArray[7] = _mm_setr_ps(a[1], b[1], c[1], d[1]);
-				pData[16 + 12] = a[1]; pData[17 + 12] = b[1]; pData[18 + 12] = c[1]; pData[19 + 12] = d[1];
-				//dataArray[11] = _mm_setr_ps(a[2], b[2], c[2], d[2]);
-				pData[32 + 12] = a[2]; pData[33 + 12] = b[2]; pData[34 + 12] = c[2]; pData[35 + 12] = d[2];
+				}
+				else {
+					float* a = pCompressVertices + pCompressIndices8[0];
+					float* b = pCompressVertices + pCompressIndices8[4];
+					float* c = pCompressVertices + pCompressIndices8[8];
+					float* d = pCompressVertices + pCompressIndices8[12];
 
-
-				a = pCompressVertices + pCompressIndices8[0 + 2];
-				b = pCompressVertices + pCompressIndices8[4 + 2];
-				c = pCompressVertices + pCompressIndices8[8 + 2];
-				d = pCompressVertices + pCompressIndices8[12 + 2];
-
-				//dataArray[2] = _mm_setr_ps(a[0], b[0], c[0], d[0]);
-				pData[0 + 8] = a[0]; pData[1 + 8] = b[0]; pData[2 + 8] = c[0]; pData[3 + 8] = d[0];
-				//dataArray[6] = _mm_setr_ps(a[1], b[1], c[1], d[1]);
-				pData[16 + 8] = a[1]; pData[17 + 8] = b[1]; pData[18 + 8] = c[1]; pData[19 + 8] = d[1];
-				//dataArray[10] = _mm_setr_ps(a[2], b[2], c[2], d[2]);
-				pData[32 + 8] = a[2]; pData[33 + 8] = b[2]; pData[34 + 8] = c[2]; pData[35 + 8] = d[2];
-
-				a = pCompressVertices + pCompressIndices8[0 + 3];
-				b = pCompressVertices + pCompressIndices8[4 + 3];
-				c = pCompressVertices + pCompressIndices8[8 + 3];
-				d = pCompressVertices + pCompressIndices8[12 + 3];
-
-				//dataArray[1] = _mm_setr_ps(a[0], b[0], c[0], d[0]);
-				pData[0 + 4] = a[0]; pData[1 + 4] = b[0]; pData[2 + 4] = c[0]; pData[3 + 4] = d[0];
-				//dataArray[5] = _mm_setr_ps(a[1], b[1], c[1], d[1]);
-				pData[16 + 4] = a[1]; pData[17 + 4] = b[1]; pData[18 + 4] = c[1]; pData[19 + 4] = d[1];
-				//dataArray[9] = _mm_setr_ps(a[2], b[2], c[2], d[2]);
-				pData[32 + 4] = a[2]; pData[33 + 4] = b[2]; pData[34 + 4] = c[2]; pData[35 + 4] = d[2];
+					//dataArray[0] = _mm_setr_ps(a[0], b[0], c[0], d[0]);
+					pData[0] = a[0]; pData[1] = b[0]; pData[2] = c[0]; pData[3] = d[0];
+					//dataArray[4] = _mm_setr_ps(a[1], b[1], c[1], d[1]);
+					pData[16] = a[1]; pData[17] = b[1]; pData[18] = c[1]; pData[19] = d[1];
+					//dataArray[8] = _mm_setr_ps(a[2], b[2], c[2], d[2]);
+					pData[32] = a[2]; pData[33] = b[2]; pData[34] = c[2]; pData[35] = d[2];
 
 
 
-				pCompressIndices8 += 16;
+					a = pCompressVertices + pCompressIndices8[0 + 1];
+					b = pCompressVertices + pCompressIndices8[4 + 1];
+					c = pCompressVertices + pCompressIndices8[8 + 1];
+					d = pCompressVertices + pCompressIndices8[12 + 1];
+
+					// dataArray[3] = _mm_setr_ps(a[0], b[0], c[0], d[0]);
+					pData[0 + 12] = a[0]; pData[1 + 12] = b[0]; pData[2 + 12] = c[0]; pData[3 + 12] = d[0];
+					//dataArray[7] = _mm_setr_ps(a[1], b[1], c[1], d[1]);
+					pData[16 + 12] = a[1]; pData[17 + 12] = b[1]; pData[18 + 12] = c[1]; pData[19 + 12] = d[1];
+					//dataArray[11] = _mm_setr_ps(a[2], b[2], c[2], d[2]);
+					pData[32 + 12] = a[2]; pData[33 + 12] = b[2]; pData[34 + 12] = c[2]; pData[35 + 12] = d[2];
+
+
+					a = pCompressVertices + pCompressIndices8[0 + 2];
+					b = pCompressVertices + pCompressIndices8[4 + 2];
+					c = pCompressVertices + pCompressIndices8[8 + 2];
+					d = pCompressVertices + pCompressIndices8[12 + 2];
+
+					//dataArray[2] = _mm_setr_ps(a[0], b[0], c[0], d[0]);
+					pData[0 + 8] = a[0]; pData[1 + 8] = b[0]; pData[2 + 8] = c[0]; pData[3 + 8] = d[0];
+					//dataArray[6] = _mm_setr_ps(a[1], b[1], c[1], d[1]);
+					pData[16 + 8] = a[1]; pData[17 + 8] = b[1]; pData[18 + 8] = c[1]; pData[19 + 8] = d[1];
+					//dataArray[10] = _mm_setr_ps(a[2], b[2], c[2], d[2]);
+					pData[32 + 8] = a[2]; pData[33 + 8] = b[2]; pData[34 + 8] = c[2]; pData[35 + 8] = d[2];
+
+					a = pCompressVertices + pCompressIndices8[0 + 3];
+					b = pCompressVertices + pCompressIndices8[4 + 3];
+					c = pCompressVertices + pCompressIndices8[8 + 3];
+					d = pCompressVertices + pCompressIndices8[12 + 3];
+
+					//dataArray[1] = _mm_setr_ps(a[0], b[0], c[0], d[0]);
+					pData[0 + 4] = a[0]; pData[1 + 4] = b[0]; pData[2 + 4] = c[0]; pData[3 + 4] = d[0];
+					//dataArray[5] = _mm_setr_ps(a[1], b[1], c[1], d[1]);
+					pData[16 + 4] = a[1]; pData[17 + 4] = b[1]; pData[18 + 4] = c[1]; pData[19 + 4] = d[1];
+					//dataArray[9] = _mm_setr_ps(a[2], b[2], c[2], d[2]);
+					pData[32 + 4] = a[2]; pData[33 + 4] = b[2]; pData[34 + 4] = c[2]; pData[35 + 4] = d[2];
+
+
+					pCompressIndices8 += 16;
+				}
 			}
-			else if (common::bEnableCompressMode) {
-				//////triData[0] = pCompressVertices + pCompressIndices[0];
-				//////triData[1] = pCompressVertices + pCompressIndices[1];
-				//////triData[2] = pCompressVertices + pCompressIndices[2];
-				//////triData[3] = pCompressVertices + pCompressIndices[3];
-				//////triData[4] = pCompressVertices + pCompressIndices[4];
-				//////triData[5] = pCompressVertices + pCompressIndices[5];
-				//////triData[6] = pCompressVertices + pCompressIndices[6];
-				//////triData[7] = pCompressVertices + pCompressIndices[7];
-				//////triData[8] = pCompressVertices + pCompressIndices[8];
-				//////triData[9] = pCompressVertices + pCompressIndices[9];
-				//////triData[10] = pCompressVertices + pCompressIndices[10];
-				//////triData[11] = pCompressVertices + pCompressIndices[11];
-				//////triData[12] = pCompressVertices + pCompressIndices[12];
-				//////triData[13] = pCompressVertices + pCompressIndices[13];
-				//////triData[14] = pCompressVertices + pCompressIndices[14];
-				//////triData[15] = pCompressVertices + pCompressIndices[15];
+			else {
 
-
-				////////dataArray[0] = _mm_setr_ps(triData[0][0], triData[4][0], triData[8][0], triData[12][0]);
-				////////dataArray[3] = _mm_setr_ps(triData[0 + 1][0], triData[4 + 1][0], triData[8 + 1][0], triData[12 + 1][0]);
-				////////dataArray[2] = _mm_setr_ps(triData[0 + 2][0], triData[4 + 2][0], triData[8 + 2][0], triData[12 + 2][0]);
-				////////dataArray[1] = _mm_setr_ps(triData[0 + 3][0], triData[4 + 3][0], triData[8 + 3][0], triData[12 + 3][0]);
-
-
-				////////dataArray[4] = _mm_setr_ps(triData[0][1], triData[4][1], triData[8][1], triData[12][1]);
-				////////dataArray[7] = _mm_setr_ps(triData[0 + 1][1], triData[4 + 1][1], triData[8 + 1][1], triData[12 + 1][1]);
-				////////dataArray[6] = _mm_setr_ps(triData[0 + 2][1], triData[4 + 2][1], triData[8 + 2][1], triData[12 + 2][1]);
-				////////dataArray[5] = _mm_setr_ps(triData[0 + 3][1], triData[4 + 3][1], triData[8 + 3][1], triData[12 + 3][1]);
-
-
-				////////dataArray[8] = _mm_setr_ps(triData[0][2], triData[4][2], triData[8][2], triData[12][2]);
-				////////dataArray[11] = _mm_setr_ps(triData[0 + 1][2], triData[4 + 1][2], triData[8 + 1][2], triData[12 + 1][2]);
-				////////dataArray[10] = _mm_setr_ps(triData[0 + 2][2], triData[4 + 2][2], triData[8 + 2][2], triData[12 + 2][2]);
-				////////dataArray[9] = _mm_setr_ps(triData[0 + 3][2], triData[4 + 3][2], triData[8 + 3][2], triData[12 + 3][2]);
-
-
-
-
-				uint16_t* a = pCompressVertices + pCompressIndices[0];
-				uint16_t* b = pCompressVertices + pCompressIndices[4];
-				uint16_t* c = pCompressVertices + pCompressIndices[8];
-				uint16_t* d = pCompressVertices + pCompressIndices[12];
+				float* a = pCompressVertices + pCompressIndices[0];
+				float* b = pCompressVertices + pCompressIndices[4];
+				float* c = pCompressVertices + pCompressIndices[8];
+				float* d = pCompressVertices + pCompressIndices[12];
 
 				//dataArray[0] = _mm_setr_ps(a[0], b[0], c[0], d[0]);
 				pData[0] = a[0]; pData[1] = b[0]; pData[2] = c[0]; pData[3] = d[0];
@@ -4003,45 +4829,13 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 
 				pCompressIndices += 16;
 			}
-			else
-			{
-				//*****************************************************************************************************
-				//now take 6 m128, each take 0.5, total 4x3
-				__m128i X0X1 = vertexData[0];
-				__m128i X2X3 = vertexData[1];
-				__m128i Y0Y1 = vertexData[2];
-				__m128i Y2Y3 = vertexData[3];
-				__m128i Z0Z1 = vertexData[4];
-				__m128i Z2Z3 = vertexData[5];
-				vertexData += 6;
 
-
-				__m128i mask = _mm_set1_epi32(65535);
-
-				dataArray[0] = _mm_cvtepi32_ps(_mm_srli_epi32(X0X1, 16));
-				dataArray[1] = _mm_cvtepi32_ps(_mm_and_si128(X2X3, mask));
-				dataArray[2] = _mm_cvtepi32_ps(_mm_srli_epi32(X2X3, 16));
-				dataArray[3] = _mm_cvtepi32_ps(_mm_and_si128(X0X1, mask));
-
-
-				dataArray[4 | 0] = _mm_cvtepi32_ps(_mm_srli_epi32(Y0Y1, 16));
-				dataArray[4 | 1] = _mm_cvtepi32_ps(_mm_and_si128(Y2Y3, mask));
-				dataArray[4 | 2] = _mm_cvtepi32_ps(_mm_srli_epi32(Y2Y3, 16));
-				dataArray[4 | 3] = _mm_cvtepi32_ps(_mm_and_si128(Y0Y1, mask));
-
-				dataArray[8 | 0] = _mm_cvtepi32_ps(_mm_srli_epi32(Z0Z1, 16));
-				dataArray[8 | 1] = _mm_cvtepi32_ps(_mm_and_si128(Z2Z3, mask));
-				dataArray[8 | 2] = _mm_cvtepi32_ps(_mm_srli_epi32(Z2Z3, 16));
-				dataArray[8 | 3] = _mm_cvtepi32_ps(_mm_and_si128(Z0Z1, mask));
-				//*****************************************************************************************************
-
-			}
 			packetsLeft--;
 
 
-			__m128 mat30 = _mm_shuffle_ps_single_index(mOccluderCache.mat[3], 0);
-			__m128 mat31 = _mm_shuffle_ps_single_index(mOccluderCache.mat[3], 1);
-			__m128 mat32 = _mm_shuffle_ps_single_index(mOccluderCache.mat[3], 2);
+			__m128 mat30 = _mm_set1_ps(matF[12]);//  _mm_shuffle_ps_single_index(occluderCache->mat[3], 0);
+			__m128 mat31 = _mm_set1_ps(matF[13]);//_mm_shuffle_ps_single_index(occluderCache->mat[3], 1);
+			__m128 mat32 = _mm_set1_ps(matF[14]);//_mm_shuffle_ps_single_index(occluderCache->mat[3], 2);
 
 			__m128 W[4];
 			W[faceIdx0] = _mm_fmadd_ps(dataArray[0], mat30, _mm_fmadd_ps(dataArray[4], mat31, _mm_fmadd_ps(dataArray[8], mat32, mat33)));
@@ -4085,17 +4879,17 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 
 			__m128 X[4], Y[4];
 
-			__m128 mat00 = _mm_shuffle_ps_single_index(mOccluderCache.mat[0], 0);
-			__m128 mat01 = _mm_shuffle_ps_single_index(mOccluderCache.mat[0], 1);
-			__m128 mat02 = _mm_shuffle_ps_single_index(mOccluderCache.mat[0], 2);
+			__m128 mat00 = _mm_set1_ps(matF[0]); //_mm_shuffle_ps_single_index(occluderCache->mat[0], 0);
+			__m128 mat01 = _mm_set1_ps(matF[1]); //_mm_shuffle_ps_single_index(occluderCache->mat[0], 1);
+			__m128 mat02 = _mm_set1_ps(matF[2]); //_mm_shuffle_ps_single_index(occluderCache->mat[0], 2);
 			X[faceIdx0] = _mm_fmadd_ps(dataArray[0], mat00, _mm_fmadd_ps(dataArray[4], mat01, _mm_fmadd_ps(dataArray[8], mat02, mat03)));
 			X[1] = _mm_fmadd_ps(dataArray[1], mat00, _mm_fmadd_ps(dataArray[5], mat01, _mm_fmadd_ps(dataArray[9], mat02, mat03)));
 			X[faceIdx2] = _mm_fmadd_ps(dataArray[2], mat00, _mm_fmadd_ps(dataArray[6], mat01, _mm_fmadd_ps(dataArray[10], mat02, mat03)));
 			X[3] = _mm_fmadd_ps(dataArray[3], mat00, _mm_fmadd_ps(dataArray[7], mat01, _mm_fmadd_ps(dataArray[11], mat02, mat03)));
 
-			__m128 mat10 = _mm_shuffle_ps_single_index(mOccluderCache.mat[1], 0);
-			__m128 mat11 = _mm_shuffle_ps_single_index(mOccluderCache.mat[1], 1);
-			__m128 mat12 = _mm_shuffle_ps_single_index(mOccluderCache.mat[1], 2);
+			__m128 mat10 = _mm_set1_ps(matF[4]); //_mm_shuffle_ps_single_index(occluderCache->mat[1], 0);
+			__m128 mat11 = _mm_set1_ps(matF[5]); //_mm_shuffle_ps_single_index(occluderCache->mat[1], 1);
+			__m128 mat12 = _mm_set1_ps(matF[6]); //_mm_shuffle_ps_single_index(occluderCache->mat[1], 2);
 			Y[faceIdx0] = _mm_fmadd_ps(dataArray[0], mat10, _mm_fmadd_ps(dataArray[4], mat11, _mm_fmadd_ps(dataArray[8], mat12, mat13)));
 			Y[1] = _mm_fmadd_ps(dataArray[1], mat10, _mm_fmadd_ps(dataArray[5], mat11, _mm_fmadd_ps(dataArray[9], mat12, mat13)));
 			Y[faceIdx2] = _mm_fmadd_ps(dataArray[2], mat10, _mm_fmadd_ps(dataArray[6], mat11, _mm_fmadd_ps(dataArray[10], mat12, mat13)));
@@ -4106,10 +4900,10 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 			// Clamp W and invert
 			__m128 invW[4];
 			//this error might up to 1 pixel for x, and y
-			invW[0] = _mm_rcp_ps(W[0]);
-			invW[1] = _mm_rcp_ps(W[1]);
-			invW[2] = _mm_rcp_ps(W[2]);
-			invW[3] = _mm_rcp_ps(W[3]);
+			invW[0] = _mm_rcp_ps_div(W[0]);
+			invW[1] = _mm_rcp_ps_div(W[1]);
+			invW[2] = _mm_rcp_ps_div(W[2]);
+			invW[3] = _mm_rcp_ps_div(W[3]);
 
 			bool realNearClipped = false;
 			if (possiblyNearClipped)
@@ -4146,7 +4940,9 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 			if (realNearClipped) //near plane clipped
 			{
 				int validMask = _mm_movemask_ps(primitiveValid);
-				SplitToTwoTriangles<true, bBackFaceCulling>(X, Y, W, invW, primitiveValid, validMask);
+				SplitToTwoTriangles<true, bBackFaceCulling && !bDrawOccludee, bDrawOccludee>(X, Y, W, invW, primitiveValid, validMask, occluderCache);
+				if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+					return;
 				continue;
 			}
 
@@ -4177,8 +4973,31 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 			areas[1] = _mm_fmsub_ps(edgeNormalsX[2], edgeNormalsY[3], _mm_mul_ps(edgeNormalsX[3], edgeNormalsY[2]));
 
 			__m128 minArea = _mm_min_ps(areas[0], areas[1]);
-			if (bPlanarMesh == false) //always set to false as planar case is very rare
 			{
+
+				//query occludee, force split to increase accuracy
+				if (bDrawOccludee && bSplitQuadToTriangleForOccludee)
+				{
+					if (bBackFaceCulling == true)
+					{
+						//Apply backface culling, reject the quad if both triangles' area < 0
+						__m128 anyPositive = _mm_cmpgt_ps(_mm_max_ps(areas[0], areas[1]), _mm_set1_ps(0.0f));
+						primitiveValid = _mm_and_ps(anyPositive, primitiveValid);
+
+						
+					}
+					int validMask = _mm_movemask_ps(primitiveValid);
+					if (bBackFaceCulling && validMask == 0) //all negative
+					{
+						continue;
+					}
+					SplitToTwoTriangles<false, bBackFaceCulling, bDrawOccludee>(X, Y, W, invW, primitiveValid, validMask, occluderCache);
+					if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+						return;
+					continue;
+				}
+				//must go through convex check even in planar case due to numeric error
+				//the convex check would guarantee that points does not overlap
 				if (bBackFaceCulling == true)
 				{
 					//Apply backface culling, reject the quad if both triangles' area < 0
@@ -4199,23 +5018,26 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 						DebugData[PrimitiveValidNum] = active;
 					}
 
-
-					//check concave scenario: if any triangle of four triangles formed by the four points has negative area
-					//the convex property is violated. going for safe way, Triangle Approach
-					__m128 area3 = _mm_fmsub_ps(edgeNormalsX[1], edgeNormalsY[2], _mm_mul_ps(edgeNormalsX[2], edgeNormalsY[1]));
-					__m128 area4 = _mm_sub_ps(_mm_add_ps(areas[0], areas[1]), area3);
-
-					//DC3 degenerate case 3: for the case of any of area1/area2 is zero,
-					//normalizeEdge would trigger divide by zero degeneracy
-					//fix: treat as concave if any of four triangle is non-positive
-					__m128 minArea4 = _mm_min_ps(_mm_min_ps(area4, area3), minArea);
-					__m128 concaveQuad = _mm_cmple_ps(minArea4, _mm_set1_ps(0.0001f));
-
-					concaveQuad = _mm_and_ps(concaveQuad, primitiveValid);//any active primitive is concave
-					if (_mm_same_sign0(concaveQuad) == false)  //at least one active primitive is concave
 					{
-						SplitToTwoTriangles<false, bBackFaceCulling>(X, Y, W, invW, primitiveValid, validMask);
-						continue;
+						//check concave scenario: if any triangle of four triangles formed by the four points has negative area
+						//the convex property is violated. going for safe way, Triangle Approach
+						__m128 area3 = _mm_fmsub_ps(edgeNormalsX[1], edgeNormalsY[2], _mm_mul_ps(edgeNormalsX[2], edgeNormalsY[1]));
+						__m128 area4 = _mm_sub_ps(_mm_add_ps(areas[0], areas[1]), area3);
+
+						//DC3 degenerate case 3: for the case of any of area1/area2 is zero,
+						//normalizeEdge would trigger divide by zero degeneracy
+						//fix: treat as concave if any of four triangle is non-positive
+						__m128 minArea4 = _mm_min_ps(_mm_min_ps(area4, area3), minArea);
+						__m128 concaveQuad = _mm_cmple_ps(minArea4, _mm_set1_ps(1e-10f));
+
+						concaveQuad = _mm_and_ps(concaveQuad, primitiveValid);//any active primitive is concave
+						if (_mm_same_sign0(concaveQuad) == false)  //at least one active primitive is concave
+						{
+							SplitToTwoTriangles<false, bBackFaceCulling, bDrawOccludee>(X, Y, W, invW, primitiveValid, validMask, occluderCache);
+							if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+								return;
+							continue;
+						}
 					}
 				}
 				else
@@ -4225,7 +5047,7 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 					__m128 area4 = _mm_sub_ps(_mm_add_ps(areas[0], areas[1]), area3);
 
 					__m128 minArea4 = _mm_min_ps(_mm_min_ps(area4, area3), minArea);
-					__m128 concaveQuad = _mm_cmple_ps(minArea4, _mm_set1_ps(0.0001f));
+					__m128 concaveQuad = _mm_cmple_ps(minArea4, _mm_set1_ps(1e-10f));
 
 					//in backface cull off mode
 					//todo: possible optimization, in case all valid negative, swap could still continue the quad approach
@@ -4233,49 +5055,13 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 					if (_mm_same_sign0(concaveQuad) == false)  //at least one active primitive is concave
 					{
 						int validMask = _mm_movemask_ps(primitiveValid);
-						SplitToTwoTriangles<false, bBackFaceCulling>(X, Y, W, invW, primitiveValid, validMask);
+						SplitToTwoTriangles<false, bBackFaceCulling, bDrawOccludee>(X, Y, W, invW, primitiveValid, validMask, occluderCache);
+						if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+							return;
 						continue;
 					}
 				}
 				//all positive
-			}
-			else
-			{
-				if (bBackFaceCulling == true)
-				{
-					//as it is a plane and not near clipped, as long as any triangle is negative, the whole plane could be culled
-					if (_mm_same_sign0(minArea) == false)
-					{
-						return;
-					}
-				}
-				else
-				{
-					//as it is a plane and not near clipped, as long as any triangle is negative, the whole order would be swapped
-					if (_mm_same_sign0(minArea) == false)
-					{
-						std::swap(X[1], X[3]);
-						std::swap(Y[1], Y[3]);
-						std::swap(W[1], W[3]);
-						std::swap(invW[1], invW[3]);
-						edgeNormalsX[0] = _mm_sub_ps(Y[1], Y[0]);
-						edgeNormalsX[1] = _mm_sub_ps(Y[2], Y[1]);
-						edgeNormalsX[2] = _mm_sub_ps(Y[3], Y[2]);
-						edgeNormalsX[3] = _mm_sub_ps(Y[0], Y[3]);
-
-
-						edgeNormalsY[0] = _mm_sub_ps(X[0], X[1]);
-						edgeNormalsY[1] = _mm_sub_ps(X[1], X[2]);
-						edgeNormalsY[2] = _mm_sub_ps(X[2], X[3]);
-						edgeNormalsY[3] = _mm_sub_ps(X[3], X[0]);
-
-						areas[0] = _mm_fmsub_ps(edgeNormalsX[0], edgeNormalsY[1], _mm_mul_ps(edgeNormalsX[1], edgeNormalsY[0]));
-						areas[1] = _mm_fmsub_ps(edgeNormalsX[2], edgeNormalsY[3], _mm_mul_ps(edgeNormalsX[3], edgeNormalsY[2]));
-					}
-				}
-
-				__m128 anyPositive = _mm_cmpgt_ps(_mm_max_ps(areas[0], areas[1]), _mm_set1_ps(0.0000001f));
-				primitiveValid = _mm_and_ps(primitiveValid, anyPositive);
 			}
 
 
@@ -4285,21 +5071,18 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 			}
 
 			////must be positive faces here now
-			drawQuad<true>(X, Y, invW, W, primitiveValid, edgeNormalsX, edgeNormalsY, areas);
-			//if (this->mCullAgressiveLevel != 0) 
-			//{
-			//	drawQuad<false>(X, Y, invW, W, primitiveValid, edgeNormalsX, edgeNormalsY, areas);
-			//}
-			//else 
-			//{
-			//	drawQuad<true>(X, Y, invW, W, primitiveValid, edgeNormalsX, edgeNormalsY, areas);
-			//}
-
+			drawQuad<true, bDrawOccludee>(X, Y, invW, W, primitiveValid, edgeNormalsX, edgeNormalsY, areas, occluderCache);
+			
+			if (bDrawOccludee) {
+				if (occluderCache->mRasterizedOccludeeVisible) {
+					return;
+				}
+			}
 		} while (packetsLeft > 0);
 	}
 #pragma region TrisProcessing
 
-	const float * triangleData[16];
+	const float * triangleData[12];
 	if(raw.TriangleBatchIdxNum > 0)
 	{
 		int triPacketCount = 0;
@@ -4309,7 +5092,6 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 		int faceNum = 0; //total triangle num for the next round
 		if (PrimitiveDataCompressed == true)
 		{
-			vertexData = (__m128i *) raw.Vertices + (raw.QuadSafeBatchNum) * 6;
 			triPacketCount = raw.TriangleBatchIdxNum;
 		}
 		else {
@@ -4346,7 +5128,27 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 				//__m128 Yf0, Yf1, Yf2;
 				//__m128 Zf0, Zf1, Zf2;
 				if (PrimitiveDataCompressed == false)
-				{					
+				{	
+					bool normalMesh = true;
+					if (bDrawOccludee && Rasterize_ClippedOccludee_AS_OCCLUDER) {
+						normalMesh = occluderCache->OccludeeMesh;
+						if (normalMesh == false) {
+							//prepare the 16 tempV
+							triangleData[0] = raw.Vertices + pIndexCurrent[0];
+							triangleData[1] = raw.Vertices + pIndexCurrent[2];
+							triangleData[2] = raw.Vertices + pIndexCurrent[1];
+							triangleData[3] = raw.Vertices + pIndexCurrent[3];
+							triangleData[3 + 1] = raw.Vertices + pIndexCurrent[5];
+							triangleData[3 + 2] = raw.Vertices + pIndexCurrent[4];
+							triangleData[6] = raw.Vertices + pIndexCurrent[6];
+							triangleData[6 + 1] = raw.Vertices + pIndexCurrent[8];
+							triangleData[6 + 2] = raw.Vertices + pIndexCurrent[7];
+							triangleData[9] = raw.Vertices + pIndexCurrent[9];
+							triangleData[9 + 1] = raw.Vertices + pIndexCurrent[11];
+							triangleData[9 + 2] = raw.Vertices + pIndexCurrent[10];
+						}
+					}
+					if(normalMesh){
 						//prepare the 16 tempV
 						triangleData[0] = raw.Vertices + pIndexCurrent[0] * 3;
 						triangleData[1] = raw.Vertices + pIndexCurrent[2] * 3;
@@ -4360,7 +5162,8 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 						triangleData[9] = raw.Vertices + pIndexCurrent[9] * 3;
 						triangleData[9 + 1] = raw.Vertices + pIndexCurrent[11] * 3;
 						triangleData[9 + 2] = raw.Vertices + pIndexCurrent[10] * 3;
-						pIndexCurrent += 12;
+					}
+					pIndexCurrent += 12;
 
 						float * dataf = (float*)dataArray;
 						Transpose(triangleData, dataf);
@@ -4369,172 +5172,67 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 				}
 				else if (bSuperCompressed) {
 
-					uint16_t* a = pCompressVertices + pCompressIndices8[0];
-					uint16_t* b = pCompressVertices + pCompressIndices8[3];
-					uint16_t* c = pCompressVertices + pCompressIndices8[6];
-					uint16_t* d = pCompressVertices + pCompressIndices8[9];
+					float* a = pCompressVertices + pCompressIndices8[0];
+					float* b = pCompressVertices + pCompressIndices8[3];
+					float* c = pCompressVertices + pCompressIndices8[6];
+					float* d = pCompressVertices + pCompressIndices8[9];
 
-					//dataArray[0] = _mm_setr_ps(a[0], b[0], c[0], d[0]);
 					pData[0] = a[0]; pData[1] = b[0]; pData[2] = c[0]; pData[3] = d[0];
-					//dataArray[3] = _mm_setr_ps(a[1], b[1], c[1], d[1]);
 					pData[12] = a[1]; pData[13] = b[1]; pData[14] = c[1]; pData[15] = d[1];
-					//dataArray[6] = _mm_setr_ps(a[2], b[2], c[2], d[2]);
 					pData[24] = a[2]; pData[25] = b[2]; pData[26] = c[2]; pData[27] = d[2];
-
-
 
 					a = pCompressVertices + pCompressIndices8[1];
 					b = pCompressVertices + pCompressIndices8[4];
 					c = pCompressVertices + pCompressIndices8[7];
 					d = pCompressVertices + pCompressIndices8[10];
 
-
-					//dataArray[2] = _mm_setr_ps(a[0], b[0], c[0], d[0]);
 					pData[8] = a[0]; pData[8 + 1] = b[0]; pData[8 + 2] = c[0]; pData[8 + 3] = d[0];
-					//dataArray[2 + 3] = _mm_setr_ps(a[1], b[1], c[1], d[1]);
 					pData[20] = a[1]; pData[20 + 1] = b[1]; pData[20 + 2] = c[1]; pData[20 + 3] = d[1];
-					//dataArray[2 + 6] = _mm_setr_ps(a[2], b[2], c[2], d[2]);
 					pData[32] = a[2]; pData[32 + 1] = b[2]; pData[32 + 2] = c[2]; pData[32 + 3] = d[2];
-
 
 					a = pCompressVertices + pCompressIndices8[2];
 					b = pCompressVertices + pCompressIndices8[5];
 					c = pCompressVertices + pCompressIndices8[8];
 					d = pCompressVertices + pCompressIndices8[11];
 
-					//dataArray[1] = _mm_setr_ps(a[0], b[0], c[0], d[0]);
 					pData[4] = a[0]; pData[4 + 1] = b[0]; pData[4 + 2] = c[0]; pData[4 + 3] = d[0];
-					//dataArray[1 + 3] = _mm_setr_ps(a[1], b[1], c[1], d[1]);
 					pData[16] = a[1]; pData[16 + 1] = b[1]; pData[16 + 2] = c[1]; pData[16 + 3] = d[1];
-					//dataArray[1 + 6] = _mm_setr_ps(a[2], b[2], c[2], d[2]);
 					pData[28] = a[2]; pData[28 + 1] = b[2]; pData[28 + 2] = c[2]; pData[28 + 3] = d[2];
-
-
 
 					pCompressIndices8 += 12;
 				}
-				else if (common::bEnableCompressMode)
+				else
 				{
+					float* a = pCompressVertices + pCompressIndices[0];
+					float* b = pCompressVertices + pCompressIndices[3];
+					float* c = pCompressVertices + pCompressIndices[6];
+					float* d = pCompressVertices + pCompressIndices[9];
 
-					////////super compress mode
-					//////triData[0] = pCompressVertices + pCompressIndices[0] ;
-					//////triData[idx1] = pCompressVertices + pCompressIndices[1];
-					//////triData[idx2] = pCompressVertices + pCompressIndices[2] ;
-					//////triData[3] = pCompressVertices + pCompressIndices[3] ;
-					//////triData[3 + idx1] = pCompressVertices + pCompressIndices[4] ;
-					//////triData[3 + idx2] = pCompressVertices + pCompressIndices[5];
-					//////triData[6] = pCompressVertices + pCompressIndices[6];
-					//////triData[6 + idx1] = pCompressVertices + pCompressIndices[7];
-					//////triData[6 + idx2] = pCompressVertices + pCompressIndices[8];
-					//////triData[9] = pCompressVertices + pCompressIndices[9] ;
-					//////triData[9 + idx1] = pCompressVertices + pCompressIndices[10];
-					//////triData[9 + idx2] = pCompressVertices + pCompressIndices[11];
-					//////pCompressIndices += 12;
-
-					//////dataArray[0] = _mm_setr_ps(triData[0][0], triData[3][0], triData[6][0], triData[9][0]);
-					//////dataArray[2] = _mm_setr_ps(triData[0 + 1][0], triData[3 + 1][0], triData[6 + 1][0], triData[9 + 1][0]);
-					//////dataArray[1] = _mm_setr_ps(triData[0 + 2][0], triData[3 + 2][0], triData[6 + 2][0], triData[9 + 2][0]);
-
-
-
-					//////dataArray[3] = _mm_setr_ps(triData[0][1], triData[3][1], triData[6][1], triData[9][1]);
-					//////dataArray[5] = _mm_setr_ps(triData[0 + 1][1], triData[3 + 1][1], triData[6 + 1][1], triData[9 + 1][1]);
-					//////dataArray[4] = _mm_setr_ps(triData[0 + 2][1], triData[3 + 2][1], triData[6 + 2][1], triData[9 + 2][1]);
-
-					//////dataArray[6] = _mm_setr_ps(triData[0][2], triData[3][2], triData[6][2], triData[9][2]);
-					//////dataArray[8] = _mm_setr_ps(triData[0 + 1][2], triData[3 + 1][2], triData[6 + 1][2], triData[9 + 1][2]);
-					//////dataArray[7] = _mm_setr_ps(triData[0 + 2][2], triData[3 + 2][2], triData[6 + 2][2], triData[9 + 2][2]);
-
-
-
-
-					uint16_t* a = pCompressVertices + pCompressIndices[0];
-					uint16_t* b = pCompressVertices + pCompressIndices[3];
-					uint16_t* c = pCompressVertices + pCompressIndices[6];
-					uint16_t* d = pCompressVertices + pCompressIndices[9];
-
-					//dataArray[0] = _mm_setr_ps(a[0], b[0], c[0], d[0]);
 					pData[0] = a[0]; pData[1] = b[0]; pData[2] = c[0]; pData[3] = d[0];
-					//dataArray[3] = _mm_setr_ps(a[1], b[1], c[1], d[1]);
 					pData[12] = a[1]; pData[13] = b[1]; pData[14] = c[1]; pData[15] = d[1];
-					//dataArray[6] = _mm_setr_ps(a[2], b[2], c[2], d[2]);
 					pData[24] = a[2]; pData[25] = b[2]; pData[26] = c[2]; pData[27] = d[2];
-
-
 
 					a = pCompressVertices + pCompressIndices[1];
 					b = pCompressVertices + pCompressIndices[4];
 					c = pCompressVertices + pCompressIndices[7];
 					d = pCompressVertices + pCompressIndices[10];
 
-
-					//dataArray[2] = _mm_setr_ps(a[0], b[0], c[0], d[0]);
 					pData[8] = a[0]; pData[8+1] = b[0]; pData[8 + 2] = c[0]; pData[8 + 3] = d[0];
-					//dataArray[2 + 3] = _mm_setr_ps(a[1], b[1], c[1], d[1]);
 					pData[20] = a[1]; pData[20 + 1] = b[1]; pData[20 + 2] = c[1]; pData[20 + 3] = d[1];
-					//dataArray[2 + 6] = _mm_setr_ps(a[2], b[2], c[2], d[2]);
 					pData[32] = a[2]; pData[32 + 1] = b[2]; pData[32 + 2] = c[2]; pData[32 + 3] = d[2];
-
 
 					a = pCompressVertices + pCompressIndices[2];
 					b = pCompressVertices + pCompressIndices[5];
 					c = pCompressVertices + pCompressIndices[8];
 					d = pCompressVertices + pCompressIndices[11];
 
-					//dataArray[1] = _mm_setr_ps(a[0], b[0], c[0], d[0]);
 					pData[4] = a[0]; pData[4 + 1] = b[0]; pData[4 + 2] = c[0]; pData[4 + 3] = d[0];
-					//dataArray[1 + 3] = _mm_setr_ps(a[1], b[1], c[1], d[1]);
 					pData[16] = a[1]; pData[16 + 1] = b[1]; pData[16 + 2] = c[1]; pData[16 + 3] = d[1];
-					//dataArray[1 + 6] = _mm_setr_ps(a[2], b[2], c[2], d[2]);
 					pData[28] = a[2]; pData[28 + 1] = b[2]; pData[28 + 2] = c[2]; pData[28 + 3] = d[2];
-
-
 
 					pCompressIndices += 12;
 				}
-				else
-				{
-					__m128i I0XY = vertexData[0];
-					__m128i I1XY = vertexData[2];
-					__m128i I2XY = vertexData[1];
-
-
-	// Vertex transformation - first W, then X & Y after camera plane culling, then Z after backface culling
-					__m128i Xi0 = _mm_srli_epi32(I0XY, 16);
-					__m128i Xi1 = _mm_srli_epi32(I1XY, 16);
-					__m128i Xi2 = _mm_srli_epi32(I2XY, 16);
-
-					dataArray[0] = _mm_cvtepi32_ps(Xi0);
-					dataArray[2] = _mm_cvtepi32_ps(Xi1);
-					dataArray[1] = _mm_cvtepi32_ps(Xi2);
-
-
-					__m128i mask = _mm_set1_epi32(65535);
-					__m128i Yi0 = _mm_and_si128(I0XY, mask);
-					__m128i Yi1 = _mm_and_si128(I1XY, mask);
-					__m128i Yi2 = _mm_and_si128(I2XY, mask);
-					dataArray[3] = _mm_cvtepi32_ps(Yi0);
-					dataArray[5] = _mm_cvtepi32_ps(Yi1);
-					dataArray[4] = _mm_cvtepi32_ps(Yi2);
-
-
-					__m128i I12Z = vertexData[3];
-	
-					dataArray[6 + 1] = _mm_cvtepi32_ps(_mm_srli_epi32(I12Z, 16));
-					dataArray[6 + 2] = _mm_cvtepi32_ps(_mm_and_si128(I12Z, mask));
-
-
-					int odd = packetIdx & 1;
-					int even = odd ^ 1;
-					uint64_t* pV = (uint64_t*)vertexData;
-					//odd  -> -1
-					//even -> 8
-					pV += (even << 3) - odd;
-					__m128i extra = _mm_unpacklo_epi16( _mm_set_epi64x(0, pV[0]), _mm_setzero_si128());
-					dataArray[6] = _mm_cvtepi32_ps(extra);
-					vertexData += 4 ^ even;
-
-				}
+				
 
 				if (DebugOccluderOccludee)
 				{
@@ -4543,9 +5241,9 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 
 				packetIdx++;
 
-				__m128 mat30 = _mm_shuffle_ps_single_index(mOccluderCache.mat[3], 0);
-				__m128 mat31 = _mm_shuffle_ps_single_index(mOccluderCache.mat[3], 1);
-				__m128 mat32 = _mm_shuffle_ps_single_index(mOccluderCache.mat[3], 2);
+				__m128 mat30 = _mm_set1_ps(matF[12]);// _mm_shuffle_ps_single_index(occluderCache->mat[3], 0);
+				__m128 mat31 = _mm_set1_ps(matF[13]);// _mm_shuffle_ps_single_index(occluderCache->mat[3], 1);
+				__m128 mat32 = _mm_set1_ps(matF[14]);// _mm_shuffle_ps_single_index(occluderCache->mat[3], 2);
 
 				__m128 W[3];
 				W[faceIdx0] = _mm_fmadd_ps(dataArray[0], mat30, _mm_fmadd_ps(dataArray[3], mat31, _mm_fmadd_ps(dataArray[6], mat32, mat33)));
@@ -4595,17 +5293,17 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 
 				__m128 X[3], Y[3];
 
-				__m128 mat00 = _mm_shuffle_ps_single_index(mOccluderCache.mat[0], 0);
-				__m128 mat01 = _mm_shuffle_ps_single_index(mOccluderCache.mat[0], 1);
-				__m128 mat02 = _mm_shuffle_ps_single_index(mOccluderCache.mat[0], 2);
+				__m128 mat00 = _mm_set1_ps(matF[0]);// _mm_shuffle_ps_single_index(occluderCache->mat[0], 0);
+				__m128 mat01 = _mm_set1_ps(matF[1]);//_mm_shuffle_ps_single_index(occluderCache->mat[0], 1);
+				__m128 mat02 = _mm_set1_ps(matF[2]);//_mm_shuffle_ps_single_index(occluderCache->mat[0], 2);
 				X[faceIdx0] = _mm_fmadd_ps(dataArray[0], mat00, _mm_fmadd_ps(dataArray[3], mat01, _mm_fmadd_ps(dataArray[6], mat02, mat03)));
 				X[1] = _mm_fmadd_ps(dataArray[2], mat00, _mm_fmadd_ps(dataArray[5], mat01, _mm_fmadd_ps(dataArray[8], mat02, mat03)));
 				X[faceIdx2] = _mm_fmadd_ps(dataArray[1], mat00, _mm_fmadd_ps(dataArray[4], mat01, _mm_fmadd_ps(dataArray[7], mat02, mat03)));
 
 
-				__m128 mat10 = _mm_shuffle_ps_single_index(mOccluderCache.mat[1], 0);
-				__m128 mat11 = _mm_shuffle_ps_single_index(mOccluderCache.mat[1], 1);
-				__m128 mat12 = _mm_shuffle_ps_single_index(mOccluderCache.mat[1], 2);
+				__m128 mat10 = _mm_set1_ps(matF[4]);//_mm_shuffle_ps_single_index(occluderCache->mat[1], 0);
+				__m128 mat11 = _mm_set1_ps(matF[5]);//_mm_shuffle_ps_single_index(occluderCache->mat[1], 1);
+				__m128 mat12 = _mm_set1_ps(matF[6]);//_mm_shuffle_ps_single_index(occluderCache->mat[1], 2);
 				Y[faceIdx0] = _mm_fmadd_ps(dataArray[0], mat10, _mm_fmadd_ps(dataArray[3], mat11, _mm_fmadd_ps(dataArray[6], mat12, mat13)));
 				Y[1] = _mm_fmadd_ps(dataArray[2], mat10, _mm_fmadd_ps(dataArray[5], mat11, _mm_fmadd_ps(dataArray[8], mat12, mat13)));
 				Y[faceIdx2] = _mm_fmadd_ps(dataArray[1], mat10, _mm_fmadd_ps(dataArray[4], mat11, _mm_fmadd_ps(dataArray[7], mat12, mat13)));
@@ -4625,15 +5323,15 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 					//}
 
 					//this error might up to 1 pixel for x, and y
-					invW[0] = _mm_rcp_ps(W[0]);
-					invW[1] = _mm_rcp_ps(W[1]);
-					invW[2] = _mm_rcp_ps(W[2]);
+					invW[0] = _mm_rcp_ps_div(W[0]);
+					invW[1] = _mm_rcp_ps_div(W[1]);
+					invW[2] = _mm_rcp_ps_div(W[2]);
 				}
-				bool treatNearClip = possiblyNearClipped;
+				bool treatNearClip = false;
 				if (possiblyNearClipped) 
 				{
 					__m128 allInfront = _mm_min_ps(_mm_min_ps(W[0], W[1]), W[2]);
-					allInfront = _mm_cmplt_ps(allInfront, _mm_set1_ps(0.00001f));
+					allInfront = _mm_cmplt_ps(allInfront, _mm_set1_ps(0.01f));
 
 					if (!_mm_same_sign0(allInfront)) //near plane clipped
 					{
@@ -4667,14 +5365,19 @@ void Rasterizer::rasterize(common::OccluderMesh& raw)
 				{
 				
 					if (treatNearClip) {
-						drawTriangle< true, bBackFaceCulling>(X, Y, invW, W, primitiveValid);
+						drawTriangle< true, bBackFaceCulling && !bDrawOccludee, bDrawOccludee>(X, Y, invW, W, primitiveValid, occluderCache);
 					}
 					else {
-						drawTriangle< false, bBackFaceCulling>(X, Y, invW, W, primitiveValid);
+						drawTriangle< false, bBackFaceCulling, bDrawOccludee>(X, Y, invW, W, primitiveValid, occluderCache);
 					}
 				}
 				else {
-					drawTriangle< false, bBackFaceCulling>(X, Y, invW, W, primitiveValid);
+					drawTriangle< false, bBackFaceCulling, bDrawOccludee>(X, Y, invW, W, primitiveValid, occluderCache);
+				}
+				if (bDrawOccludee) {
+					if (occluderCache->mRasterizedOccludeeVisible) {
+						return ;
+					}
 				}
 
 
@@ -4717,12 +5420,13 @@ static void StoreBlock(uint64_t t0, int blockIdx, uint8_t * target, uint8_t valu
 #endif
 
 #if defined( SUPPORT_ALL_FEATURE)
+static int mCurrentDebugMaskCount = 0;
+static int mMaxBlockRowDump = 100;
 void Rasterizer::DumpColumnBlock(uint64_t t0, uint64_t t1, uint64_t t2, uint16_t maxDepth, uint64_t blockMask)
 {
 	if (bDumpBlockColumnImage == false) return;
-	static int mCurrentDebugMaskCount = 0;
 	int maskDumpWith = 80;
-	int maskDumpHeight = 16 * 50; //store max 100 column data
+	int maskDumpHeight = 16 * mMaxBlockRowDump; //store max 100 row data //one row data + one row black space region
 	static std::vector<uint8_t> buffer;
 	if (buffer.size() == 0) {
 		buffer.resize(maskDumpWith * maskDumpHeight); //only save r,g channel and b = r&g
@@ -4732,7 +5436,7 @@ void Rasterizer::DumpColumnBlock(uint64_t t0, uint64_t t1, uint64_t t2, uint16_t
 
 	target += mCurrentDebugMaskCount * 16 * maskDumpWith;
 	mCurrentDebugMaskCount++;
-	if (mCurrentDebugMaskCount > maskDumpHeight / 8)
+	if (mCurrentDebugMaskCount >= mMaxBlockRowDump)
 	{
 		return;
 	}
@@ -4782,6 +5486,7 @@ void Rasterizer::DumpColumnBlock(uint64_t t0, uint64_t t1, uint64_t t2, uint16_t
 		ofs.close();
 		LOGI("dumpFullImage %s", filenameImage.c_str());
 	}
+	delete[] img;
 }
 #endif
 
@@ -4891,6 +5596,51 @@ void Rasterizer::updateBlockWithMaxZ(__m128 rowDepthLeft, __m128 rowDepthRight, 
 }
 
 #endif
+void Rasterizer::updateBlockMSCBPartial_Occludee(uint32_t* depth32, uint64_t blockMask, __m128i* out, OccluderRenderCache * cache)
+{
+#if defined(SDOC_NATIVE)
+	if (false) {
+		__m128i	depthBottom = _mm_setr_epi32(depth32[0], depth32[0], depth32[1], depth32[1]);
+		__m128i	depthTop = _mm_setr_epi32(depth32[2], depth32[2], depth32[3], depth32[3]);
+		__m128i interleavedBlockMask = _mm_unpacklo_epi8_soc(blockMask);
+		__m128i out0 = out[0];
+		__m128i new0 = _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), depthBottom);
+		__m128i visible = _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), _mm_cmple_epu16_soc(out[0], depthBottom));
+		interleavedBlockMask = _mm_slli_epi16(interleavedBlockMask, 2);
+		bool A = _mm_anybit_one_soc(visible);
+		__m128i out1 = out[1];
+		__m128i new1 = _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), depthBottom);
+		visible = _mm_or_si128(visible, _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), _mm_cmple_epu16_soc(out[1], depthBottom)));
+		interleavedBlockMask = _mm_slli_epi16(interleavedBlockMask, 2);
+		bool B = _mm_anybit_one_soc(visible);
+		__m128i out2 = out[2];
+		__m128i new2 = _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), depthBottom);
+		visible = _mm_or_si128(visible, _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), _mm_cmple_epu16_soc(out[2], depthTop)));
+		interleavedBlockMask = _mm_slli_epi16(interleavedBlockMask, 2);
+		bool C = _mm_anybit_one_soc(visible);
+		__m128i out3 = out[3];
+		__m128i new3 = _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), depthBottom);
+		visible = _mm_or_si128(visible, _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), _mm_cmple_epu16_soc(out[3], depthTop)));
+		cache->mRasterizedOccludeeVisible = _mm_anybit_one_soc(visible);
+		if (cache->mRasterizedOccludeeVisible) {
+			return;
+		}
+		return;
+	}
+#endif
+
+	__m128i	depthBottom = _mm_setr_epi32(depth32[0], depth32[0], depth32[1], depth32[1]);
+	__m128i	depthTop = _mm_setr_epi32(depth32[2], depth32[2], depth32[3], depth32[3]);
+	__m128i interleavedBlockMask = _mm_unpacklo_epi8_soc(blockMask);
+	__m128i visible = _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), _mm_cmple_epu16_soc(out[0], depthBottom));
+	interleavedBlockMask = _mm_slli_epi16(interleavedBlockMask, 2);
+	visible = _mm_or_si128(visible, _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), _mm_cmple_epu16_soc(out[1], depthBottom)));
+	interleavedBlockMask = _mm_slli_epi16(interleavedBlockMask, 2);
+	visible = _mm_or_si128(visible, _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), _mm_cmple_epu16_soc(out[2], depthTop)));
+	interleavedBlockMask = _mm_slli_epi16(interleavedBlockMask, 2);
+	visible = _mm_or_si128(visible, _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), _mm_cmple_epu16_soc(out[3], depthTop)));
+	cache->mRasterizedOccludeeVisible = _mm_anybit_one_soc(visible);
+}
 
 void Rasterizer::updateBlockMSCBPartial(uint32_t * depth32, uint64_t blockMask, __m128i* out, uint64_t* maskData, uint16_t * pBlockRowHiZ, uint16_t maxBlockDepth)
 {
@@ -5046,11 +5796,70 @@ void Rasterizer::updateBlock(__m128i* depthRows, uint64_t blockMask,   __m128i *
 	}
 	
 }
+bool Rasterizer::updateBlock_Occludee(__m128i* depthRows, uint64_t blockMask, __m128i* out, uint16_t* pBlockRowHiZ)
+{
+	if (PairBlockNum != FullBlockApproach) {
+		return false;
+	}
+	{
+		__m128i depthBottom = depthRows[0];
+		__m128i depthTop = depthRows[1];
+		if (blockMask != -1)
+		{
+			__m128i interleavedBlockMask = _mm_unpacklo_epi8_soc(blockMask);
+			if (pBlockRowHiZ[0] == 0) {
+				return true; // init-partial update, hizMin is surely zero. No need to calculate
+			}
+			else {
+				__m128i visible = _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), _mm_cmple_epu16_soc(out[0],  depthBottom)); interleavedBlockMask = _mm_slli_epi16(interleavedBlockMask, 1);
+				visible = _mm_or_si128(visible, _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), _mm_cmple_epu16_soc(out[1], depthBottom))); interleavedBlockMask = _mm_slli_epi16(interleavedBlockMask, 1);
+				visible = _mm_or_si128(visible, _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), _mm_cmple_epu16_soc(out[2], depthBottom))); interleavedBlockMask = _mm_slli_epi16(interleavedBlockMask, 1);
+				visible = _mm_or_si128(visible, _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), _mm_cmple_epu16_soc(out[3], depthBottom))); interleavedBlockMask = _mm_slli_epi16(interleavedBlockMask, 1);
+				visible = _mm_or_si128(visible, _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), _mm_cmple_epu16_soc(out[4], depthTop))); interleavedBlockMask = _mm_slli_epi16(interleavedBlockMask, 1);
+				visible = _mm_or_si128(visible, _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), _mm_cmple_epu16_soc(out[5], depthTop))); interleavedBlockMask = _mm_slli_epi16(interleavedBlockMask, 1);
+				visible = _mm_or_si128(visible, _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), _mm_cmple_epu16_soc(out[6], depthTop))); interleavedBlockMask = _mm_slli_epi16(interleavedBlockMask, 1);
+				visible = _mm_or_si128(visible, _mm_and_si128(_mm_srai_epi16(interleavedBlockMask, 15), _mm_cmple_epu16_soc(out[7], depthTop)));
+				if (_mm_anybit_one_soc(visible)) {
+					return true;
+				}
+			}
+		}
+		else
+		{
+			////keep original for reference
+			// All pixels covered => skip edge tests
+			if (pBlockRowHiZ[0] == 0)
+			{
+				return true;
+			}
+			else
+			{
+				__m128i visible = _mm_cmple_epu16_soc(out[0], depthBottom);
+				visible = _mm_cmple_epu16_soc(out[1], depthBottom);
+				visible = _mm_or_si128(visible, _mm_cmple_epu16_soc(out[2], depthBottom));
+				visible = _mm_or_si128(visible, _mm_cmple_epu16_soc(out[3], depthBottom));
+				visible = _mm_or_si128(visible, _mm_cmple_epu16_soc(out[4], depthTop));
+				visible = _mm_or_si128(visible, _mm_cmple_epu16_soc(out[5], depthTop));
+				visible = _mm_or_si128(visible, _mm_cmple_epu16_soc(out[6], depthTop));
+				visible = _mm_or_si128(visible, _mm_cmple_epu16_soc(out[7], depthTop));
+				if (_mm_anybit_one_soc(visible)) {
+					return true;
+				}
+			}
+		}
+	}
+	return false;
+}
+
 #endif
 
-template <bool possiblyNearClipped, bool bBackFaceCulling>
-void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  __m128 primitiveValid)
+template <bool possiblyNearClipped, bool bBackFaceCulling, bool bDrawOccludee>
+void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  __m128 primitiveValid, OccluderRenderCache* occluderCache)
 {
+
+
+	PrimitiveBoundaryClipCache* PrimitivePixelClip = &occluderCache->mPixelClip;
+
 	__m128 edgeNormalsX[3], edgeNormalsY[3];
 	edgeNormalsX[0] = _mm_sub_ps(y[1], y[0]);
 	edgeNormalsX[1] = _mm_sub_ps(y[2], y[1]);
@@ -5154,8 +5963,8 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 		}
 		else
 		{
-			//respect primitiveValid as it might come from Quad
-			primitiveValid = _mm_and_ps(negativeArea, primitiveValid);
+			__m128 validLarge = _mm_cmplt_ps(negativeArea, _mm_set1_ps(-0.00002));  //if primitive too small, just ignore!!!
+			primitiveValid = _mm_and_ps(validLarge, primitiveValid);
 		}
 
 
@@ -5165,18 +5974,17 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 			this->DebugData[PrimitiveBackFaceCull] += DebugData[PrimitiveValidNum] - temp;
 			DebugData[PrimitiveValidNum] = temp;
 		}
-
-		if (_mm_same_sign0(primitiveValid) == true)
-		{
-			if (DebugOccluderOccludee)
-			{
-				this->DebugData[P4BackFaceCull]++;
-			}
-			return;
-		}
-
 	}
 
+
+	if (_mm_same_sign0(primitiveValid) == true)
+	{
+		if (DebugOccluderOccludee)
+		{
+			this->DebugData[P4BackFaceCull]++;
+		}
+		return;
+	}
 
 	__m128 minFx, minFy, maxFx, maxFy;
 	__m128 NearClipMaskMin;
@@ -5193,6 +6001,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 		__m128 maskMin1 = _mm_cmplt_ps(W[1], infN);
 		__m128 maskMin2 = _mm_cmplt_ps(W[2], infN);
 		NearClipMaskMin = _mm_or_ps(_mm_or_ps(maskMin0, maskMin1), maskMin2);
+
 
 		// have some slight improvement
 		__m128 minPx = _mm_min_ps(
@@ -5250,15 +6059,22 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 
 	// Clamp upper bound and unpack
 	__m128i bounds[4];
-
-	bounds[0] = _mm_max_epi32(_mm_cvttps_epi32(minFx), _mm_set1_epi32(mBlockWidthMin));
-	bounds[1] = _mm_min_epi32(_mm_cvttps_epi32(maxFx), _mm_set1_epi32(mBlockWidthMax));
+	if (bDrawOccludee && Rasterize_ClippedOccludee_AS_OCCLUDER) {
+		bounds[0] = _mm_max_epi32(_mm_cvttps_epi32(minFx), _mm_set1_epi32(0));
+		bounds[1] = _mm_min_epi32(_mm_cvttps_epi32(maxFx), _mm_set1_epi32(m_blocksXMinusOne));
+	}
+	else {
+		bounds[0] = _mm_max_epi32(_mm_cvttps_epi32(minFx), _mm_set1_epi32(mBlockWidthMin));
+		bounds[1] = _mm_min_epi32(_mm_cvttps_epi32(maxFx), _mm_set1_epi32(mBlockWidthMax));
+	}
 	bounds[2] = _mm_max_epi32(_mm_cvttps_epi32(minFy), _mm_setzero_si128());
 	bounds[3] = _mm_min_epi32(_mm_cvttps_epi32(maxFy), _mm_set1_epi32(m_blocksYMinusOne));
 
 	// Check overlap between bounding box and frustum
 	__m128 isInFrustum = _mm_castsi128_ps(_mm_and_si128(_mm_cmple_epi32_soc(bounds[0], bounds[1]), _mm_cmple_epi32_soc(bounds[2], bounds[3])));
-	
+	__m128 one16 = _mm_set1_ps(1.0/16.0);
+	isInFrustum = _mm_and_ps(isInFrustum, _mm_cmpge_ps(maxFx, one16));
+	isInFrustum = _mm_and_ps(isInFrustum, _mm_cmpge_ps(maxFy, one16));
 
 	primitiveValid = _mm_and_ps(isInFrustum, primitiveValid);
 	uint32_t validMask = _mm_movemask_ps(primitiveValid);
@@ -5286,16 +6102,10 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 
 
 	// Compute Z from linear relation with 1/W
-	__m128 maxZ = _mm_fmadd_ps(_mm_max_ps(_mm_max_ps(invW[0], invW[1]), invW[2]), mOccluderCache.c1, mOccluderCache.c0);
+	__m128 maxZ = _mm_fmadd_ps(_mm_max_ps(_mm_max_ps(invW[0], invW[1]), invW[2]), occluderCache->c1, occluderCache->c0);
 	// If any W < 0, assume maxZ = 1 (effectively disabling Hi-Z)
 	if (possiblyNearClipped)
 	{
-		//__m128 maskWSign = _mm_cmplt_ps(_mm_or_ps(_mm_or_ps(wSign[0], wSign[1]), _mm_or_ps(wSign[2], wSign[0])), _mm_setzero_ps());
-		//__m128 maskWSign = _mm_cmplt_ps(_mm_or_ps(_mm_or_ps(wSign[0], wSign[1]), wSign[2]), _mm_setzero_ps());
-		//__m128 MAX_depthv = _mm_castsi128_ps(_mm_set1_epi32(0x0ffff000));
-		//maxZ = _mm_blendv_ps(maxZ, MAX_depthv, NearClipMaskMin); //
-
-		//maxZ = _mm_min_ps(maxZ, MAX_depthv);
 		maxZ = _mm_or_ps(maxZ, NearClipMaskMin);  //save one load and _mm_blendv_ps
 	}
 	else
@@ -5303,17 +6113,67 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 		//maxZ = _mm_min_ps(maxZ, _mm_castsi128_ps(_mm_set1_epi32(0x0ffff000)));
 	}
 
-	__m128i maxZi = PackPositiveBatchZ(maxZ);
+	__m128i maxZi = _mm_srai_epi32(_mm_castps_si128(maxZ), 12);
 
-	uint32_t*depthBounds = (uint32_t*)&maxZi;
-
+	maxZi = _mm_min_epu32(maxZi, _mm_set1_epi32(65535));
+	uint32_t* depthBounds = (uint32_t*)&maxZi;
 	
+
+	__m128i minZi;
+	uint32_t* depthBoundsMin;
+
+	if (bDrawOccludee && possiblyNearClipped == false)
+	{
+		__m128 minZ;
+		if (occluderCache->SuperFlatOccludee == false) {
+			minZ = _mm_fmadd_ps(_mm_min_ps(_mm_min_ps(invW[0], invW[1]), invW[2]), occluderCache->c1, occluderCache->c0);
+			minZ = _mm_and_ps(minZ, _mm_cmpgt_ps(minZ, _mm_setzero_ps()));
+		}
+		else {
+			minZ = maxZ;
+		}
+
+		minZi = _mm_srai_epi32(_mm_castps_si128(minZ), 12);
+		depthBoundsMin = (uint32_t*)&minZi;
+	}
+
 	//quick cull check
 	if (CULL_FEATURE_HizPrimitiveCull)
 	{
 		uint32_t alivePrimitive = 0;
-		uint16_t *pHiZBuffer = m_pHiz;
+		uint16_t* pHiZBuffer = m_pHiz;
 		uint32_t pValidIdx = mAliveIdxMask[validMask];
+		if (bDrawOccludee && possiblyNearClipped == false)
+		{
+			uint32_t pValidIdx2 = pValidIdx;
+
+			__m128 cx = _mm_add_ps(_mm_add_ps(x[0], x[1]), x[2]);
+			__m128 cy = _mm_add_ps(_mm_add_ps(x[0], x[1]), x[2]);
+			__m128 scaleC = _mm_set1_ps(1.0f/3.0f);
+			cx = _mm_mul_ps(cx, scaleC);
+			cy = _mm_mul_ps(cy, scaleC);
+
+			float* cxf = (float*)&cx;
+			float* cyf = (float*)&cy;
+
+			do{
+				uint32_t primitiveIdx = pValidIdx2 & 3;
+				pValidIdx2 >>= 2;
+				uint16_t primitiveMinZ = depthBoundsMin[primitiveIdx];
+				uint16_t* pOffsetHiZMax = pHiZBuffer + m_HizBufferSize;
+				uint32_t xLoc = (uint32_t)cxf[primitiveIdx];
+				uint32_t yLoc = (uint32_t)cyf[primitiveIdx];
+				if (cxf[primitiveIdx] >= 0.0f && xLoc <= m_blocksXMinusOne && cyf[primitiveIdx] >= 0.0f && yLoc <= m_blocksYMinusOne) {
+					uint32_t xyLoc = (m_blocksX * yLoc + xLoc);
+					uint16_t max = pOffsetHiZMax[xyLoc] - 1;
+					if (primitiveMinZ > max ) {
+						occluderCache->mRasterizedOccludeeVisible = true;
+						return;
+					}
+				}
+			} while (pValidIdx2 != 0);
+		}
+
 		do
 		{
 			// Move index and mask to next set bit
@@ -5373,7 +6233,9 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 
 						// Load HiZ for 8 blocks at once - note we're possibly reading out-of-bounds here; but it doesn't affect correctness if we test more blocks than actually covered
 						__m128i hiZblob = _mm_loadu_si128(reinterpret_cast<const __m128i *>(pBlockRowHiZ));
-						__m128i cmpResult = _mm_cmplt_epu16_soc(hiZblob, primitiveMaxZVi);
+						__m128i cmpResult;
+						if(bDrawOccludee)	cmpResult  = _mm_cmple_epu16_soc(hiZblob, primitiveMaxZVi);
+						else 				cmpResult = _mm_cmplt_epu16_soc(hiZblob, primitiveMaxZVi);
 						uint64_t * r64 = (uint64_t *)& cmpResult;
 						uint64_t result = r64[0] & r64[1];
 
@@ -5384,8 +6246,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 							int32_t offset = byteBlockCheck & 3;
 							r64[bit] <<= (3 ^ offset) << 4;
 
-							uint64_t mask1 = -bit;
-							r64[1] &= mask1;
+							r64[1] &= (uint64_t)(-bit);
 
 
 							result = r64[0] | r64[1];
@@ -5436,6 +6297,17 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 		DebugData[P4EarlyHizCullPass] ++;
 	}
 
+	if (bDrawOccludee && possiblyNearClipped == false) {
+		minZi = _mm_slli_epi32(minZi, 12);
+	}
+	else
+	{
+		__m128 minZ = _mm_fmadd_ps(_mm_min_ps(_mm_min_ps(invW[0], invW[1]), invW[2]), occluderCache->c1, occluderCache->c0);
+		minZ = _mm_and_ps(minZ, _mm_cmpgt_ps(minZ, _mm_setzero_ps()));
+		minZi = _mm_castps_si128(minZ);
+		depthBoundsMin = (uint32_t*)&minZi;
+	}
+
     if (bPixelAABBClipping)
     {
         auto scale8 = _mm_set1_ps(8);
@@ -5444,20 +6316,20 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 		__m128i pixel = _mm_cvttps_epi32(_mm_mul_ps(minFx, scale8));
 		//make bit 16~31 store block value for each int component
 		//make bit 0~15 store block pixel remainder(0~7)
-		mPrimitiveBoundaryClip->PrimitivePixelBounds[0] = _mm_and_si128(mask, _mm_or_si128(_mm_slli_epi32(pixel, 13), pixel));
+		PrimitivePixelClip->PrimitivePixelBounds[0] = _mm_and_si128(mask, _mm_or_si128(_mm_slli_epi32(pixel, 13), pixel));
 		pixel = _mm_cvttps_epi32(_mm_mul_ps(maxFx, scale8));
-		mPrimitiveBoundaryClip->PrimitivePixelBounds[1] = _mm_and_si128(mask, _mm_or_si128(_mm_slli_epi32(pixel, 13), pixel));
+		PrimitivePixelClip->PrimitivePixelBounds[1] = _mm_and_si128(mask, _mm_or_si128(_mm_slli_epi32(pixel, 13), pixel));
 		pixel = _mm_cvttps_epi32(_mm_mul_ps(minFy, scale8));
-		mPrimitiveBoundaryClip->PrimitivePixelBounds[2] = _mm_and_si128(mask, _mm_or_si128(_mm_slli_epi32(pixel, 13), pixel));
+		PrimitivePixelClip->PrimitivePixelBounds[2] = _mm_and_si128(mask, _mm_or_si128(_mm_slli_epi32(pixel, 13), pixel));
 		pixel = _mm_cvttps_epi32(_mm_mul_ps(maxFy, scale8));
-		mPrimitiveBoundaryClip->PrimitivePixelBounds[3] = _mm_and_si128(mask, _mm_or_si128(_mm_slli_epi32(pixel, 13), pixel));
+		PrimitivePixelClip->PrimitivePixelBounds[3] = _mm_and_si128(mask, _mm_or_si128(_mm_slli_epi32(pixel, 13), pixel));
     }
 
 	
 
-	if (this->mDebugRenderMode)
+	if (this->mDebugRenderMode && bDrawOccludee == false)
 	{
-		HandleDrawMode<3>(x, y, invW, validMask);
+		HandleDrawMode<3>(x, y, invW, validMask, occluderCache);
 		if(bDebugOccluderOnly){
 			if (this->DebugData[BlockPacketPrimitiveDebug] == 0) return;
 			this->DebugData[BlockPacketPrimitiveDebug] = 0;
@@ -5469,22 +6341,14 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 	edgeNormalsY[2] = _mm_sub_ps(x[2], x[0]);
 
 
+	// Do a precise division to reduce error in depth plane. Note that the negativeArea computed here
+	// differs from the rasterized region if W < 0, so it can be very small for large covered screen regions.
+	//invArea = _mm_div_ps(_mm_set1_ps(1.0f), negativeArea);
+	__m128 negativeC1 = _mm_negate_ps_soc(occluderCache->c1);
+	__m128 invArea = _mm_div_ps(negativeC1, negativeArea);
 
-	__m128 invArea;
-	if (possiblyNearClipped)
-	{
-		// Do a precise division to reduce error in depth plane. Note that the negativeArea computed here
-		// differs from the rasterized region if W < 0, so it can be very small for large covered screen regions.
-		//invArea = _mm_div_ps(_mm_set1_ps(1.0f), negativeArea);
-		invArea = _mm_div_ps(mOccluderCache.NegativeC1, negativeArea);
-	}
-	else
-	{
-		invArea = _mm_rcp_ps_div(negativeArea);
-		invArea = _mm_mul_ps(invArea, mOccluderCache.NegativeC1);
-	}
 
-	__m128 z0 = _mm_fmadd_ps(invW[0], mOccluderCache.c1, mOccluderCache.c0);
+	__m128 z0 = _mm_fmadd_ps(invW[0], occluderCache->c1, occluderCache->c0);
 	__m128 z20 = _mm_sub_ps(invW[2], invW[0]);
 	__m128 z12 = _mm_sub_ps(invW[1], invW[2]);
 
@@ -5496,20 +6360,11 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 	depthPlane[2] = _mm_mul_ps(invArea, _mm_fmsub_ps(z20, edgeNormalsY[1], _mm_mul_ps(z12, edgeNormalsY[2])));
 
 
-	if (bDepthAtCenterOptimization == false) 
-	{
-		// Depth at center of first pixel
-		auto one16 = _mm_set1_ps(1.0f / 16.0f); //load into register once
-		__m128 refX = _mm_sub_ps(one16, x[0]);
-		__m128 refY = _mm_sub_ps(one16, y[0]);
-		depthPlane[0] = _mm_fmadd_ps(refX, depthPlane[1], _mm_fmadd_ps(refY, depthPlane[2], z0));
-	}
-	else 
-	{
-		// Depth at center of first pixel. Optimization. Save One _mm_sub_ps X horizontally
-		//allow vertical half pixel error. This would save 1 _mm_sub_ps Y vertically and avoid load 1/16 into memory
-		depthPlane[0] = _mm_sub_ps(z0, _mm_fmadd_ps(x[0], depthPlane[1], _mm_mul_ps(y[0], depthPlane[2])));
-	}
+	
+	// Depth at center of first pixel
+	__m128 refX = _mm_sub_ps(_mm_set1_ps(1.0f / 16.0f), x[0]);
+	__m128 refY = _mm_sub_ps(_mm_set1_ps(1.0f / 16.0f), y[0]);
+	depthPlane[0] = _mm_fmadd_ps(refX, depthPlane[1], _mm_fmadd_ps(refY, depthPlane[2], z0));
 
 	// Flip edges if W < 0
 	__m128 edgeFlipMask[3];
@@ -5604,6 +6459,9 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 		}
 	}
 
+
+	__m128 largePrimitive = _mm_cmplt_ps(negativeArea, _mm_set1_ps(-ExtremeSmallPrimitiveAreaTh));
+	uint32_t* largePrimitivef = (uint32_t*)&largePrimitive;
 	do
 	{	
 		uint32_t primitiveIdx = validMask & 3;
@@ -5630,15 +6488,14 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 		// Extract and prepare per-primitive dataprimitiveMaxZV
 		uint32_t primitiveMaxZf = depthBounds[primitiveIdx];
 		uint16_t primitiveMaxZ = (uint16_t)primitiveMaxZf;
+		uint32_t primitiveMinZf = depthBoundsMin[primitiveIdx];
 
-		if (SupportDepthTill65K) {
-			primitiveMaxZf |= 65536;
-			primitiveMaxZf <<= 11;
+		primitiveMaxZf <<= 12;
+		uint32_t small_primitive_special_mask = -1;
+		if (bDrawOccludee || bDebugVerySmallOccluders) {
+			small_primitive_special_mask = largePrimitivef[primitiveIdx];
 		}
-		else {
-			primitiveMaxZf <<= 12;
-		}
-        
+
 
 #if defined( SUPPORT_ALL_FEATURE)
 		static int DebugPrimitiveId = 0;
@@ -5675,7 +6532,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 		int xIncrease = (int)(depthPlaneData[4] > 0);
 		int yIncrease = (int)(slope > 0);
 		//data16: btmLeft 0 1 btmRight 2 3 topleft 4 5 topright 6 7
-		int maxBlockIdx = (xIncrease + yIncrease * 2) << 1;
+		int maxBlockIdx = (xIncrease  + yIncrease * 2) << 1;
 		int	minBlockIdx = 6 ^ maxBlockIdx;
 
 
@@ -5684,8 +6541,6 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 		__m128 depthLeftBase;
 		if (VRS_X4Y4_Optimzation)
 		{
-			//0.0f, 0.125f, 0.25f, 0.375f, 0.5f, 0.625,
-
 			depthLeftBase = _mm_fmadd_ps(depthDx, xFactors[xIncrease], _mm_set1_ps(depthPlaneData[0]));
 			float halfSlope = slope * 0.5f;
 			depthLeftBase = _mm_add_ps(depthLeftBase, _mm_setr_ps(0, 0, halfSlope, halfSlope));
@@ -5702,49 +6557,6 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 		const uint32_t blockMinY = boundData[8];
 		const uint32_t blockMaxY = boundData[12];
 
-		//Degenerate cases:
-		//IMOC calculate horizontal line by regulate to pixel integer
-		//IMOC apply ClipPolygon, and get the triangle area equals to zero
-		//case: SuntempSlope.cap
-		//status: partial fix for horizontal degenerate case which appear most often
-		//only 2.5% primitive would pass this check. so impact is very low
-		if ( abs(slope) > 6E-32) //floatCompressionBias = 2.5237386e-29f   
-		{
-			if (blockMaxY == blockMinY && (primitiveMaxZ > 205 * 256 && primitiveMaxZ != 65535))
-			{
-				float * negativeAreaf = (float*)& negativeArea;
-				if (abs(negativeAreaf[primitiveIdx]) <= 3)
-				{
-					bool flat = false;
-					if (slopeLookup[0] == slopeLookup[4])
-					{
-						flat = (slopeLookup[0] + slopeLookup[8]) == 4032;
-					}
-					else if (slopeLookup[0] == slopeLookup[8] || slopeLookup[8] == slopeLookup[4])
-					{
-						flat = (slopeLookup[0] + slopeLookup[4]) == 4032;
-					}
-					if (flat)
-					{
-						__m128 minZ = _mm_fmadd_ps(_mm_min_ps(_mm_min_ps(invW[0], invW[1]), invW[2]), mOccluderCache.c1, mOccluderCache.c0);
-						__m128i minZi = _mm_castps_si128(minZ);
-						int * minzp = (int*)&minZi;
-						if (minzp[primitiveIdx] > 0)
-						{
-							//std::cout << "H reset maxz from " << primitiveMaxZ << " to " << (minzp[primitiveIdx] >> 12) << std::endl;
-							primitiveMaxZf = minzp[primitiveIdx];
-						}
-						//else {
-						//	__m128 maxZ = _mm_fmadd_ps(_mm_max_ps(_mm_max_ps(invW[0], invW[1]), invW[2]), mOccluderCache.c1, mOccluderCache.c0);
-						//	__m128i maxZi = _mm_castps_si128(maxZ);
-						//	int * maxzp = (int*)&maxZi;
-						//	primitiveMaxZf = maxzp[primitiveIdx];
-						//}
-					}
-				}
-			}
-		}
-	
 
 
 		float * edgeNormalsXf = (float*)edgeNormalsX + primitiveIdx;
@@ -5777,7 +6589,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 
 		if (bPixelAABBClipping)
 		{
-			mPrimitiveBoundaryClip->UpdatePixelAABBData(primitiveIdx);
+			PrimitivePixelClip->UpdatePixelAABBData(primitiveIdx, mPixelBound);
 		}
 		if (DebugOccluderOccludee) {
 			DebugData[BlockTotalPrimitives]++;
@@ -5816,9 +6628,13 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 				__m128i lookup = _mm_cvttps_epi32(offsetX);
 				offsetX = _mm_add_ps(edgeNormalX, offsetX);
 				lookup = _mm_max_epi32(lookup, _mm_setzero_si128());
+				
+				uint32_t* lookIdx = (uint32_t*)&lookup;
+				uint32_t idxOr = lookIdx[0] | lookIdx[1] | lookIdx[2];
+				if (bDrawOccludee || bDebugVerySmallOccluders) {
+					idxOr &= small_primitive_special_mask;
+				}
 
-				int32_t * lookIdx = (int32_t *)&lookup;
-				int32_t idxOr = lookIdx[0] | lookIdx[1] | lookIdx[2];
 				if (idxOr > 63)
 				{
 					NextBlockX++;
@@ -5883,26 +6699,34 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 					}
 				}
 				
-				
+
 				if (bDumpBlockColumnImage)
 				{
 					if (blockX == DebugDumpBlockX && blockY == DebugDumpBlockY) {}
 					else continue;
 
-				}
+					}
 
 				//draw triangle
 				if (VRS_X4Y4_Optimzation)
 				{
 					__m128i rowDepthLeft = _mm_castps_si128(_mm_fmadd_ps(depthDx, _mm_set1_ps((float)blockX), rowDepthLeftOffsetY));
 
-					rowDepthLeft = _mm_max_epi32(rowDepthLeft, _mm_set1_epi32(MIN_PIXEL_DEPTH_FLOAT_INT));
+					rowDepthLeft = _mm_max_epi32(rowDepthLeft, _mm_set1_epi32(primitiveMinZf));
 					rowDepthLeft = _mm_min_epi32(rowDepthLeft, _mm_set1_epi32(primitiveMaxZf));
 
 					__m128i depthData = packDepthPremultipliedVRS12Fast(rowDepthLeft);
+
 					uint16_t * depth16 = (uint16_t*)&depthData;
 
 					uint16_t maxBlockDepth = depth16[maxBlockIdx];
+					if (bDebug_ValidateMinMaxBlockIdx) {
+						uint16_t minDepth = depth16[minBlockIdx];
+						for (int xx = 0; xx < 8; xx++) {
+							assert(depth16[xx] <= maxBlockDepth);
+							assert(depth16[xx] >= minDepth);
+						}
+					}
 					if (maxBlockDepth > pBlockRowHiZ[0])
 					{
 						uint64_t *outBlockData = outblockRowData + blockX * PairBlockNum;
@@ -5910,7 +6734,11 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 						uint32_t * depth32 = (uint32_t*)depth16;
 						if (PairBlockNum <= CheckerBoardVizMaskApproach)
 						{
-							if (blockMask != -1)
+							bool small_primitive_check = false;
+							if (bDrawOccludee || bDebugVerySmallOccluders) {
+								small_primitive_check = small_primitive_special_mask == 0;
+							}
+							if (blockMask != -1 || small_primitive_check)
 							{
 								if (DebugOccluderOccludee)
 								{
@@ -5920,7 +6748,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 
 								if (bPixelAABBClipping)
 								{
-									blockMask &= mPrimitiveBoundaryClip->GetPixelAABBMask(blockX, blockY);
+									blockMask &= PrimitivePixelClip->GetPixelAABBMask(blockX, blockY);
 									if (blockMask == 0)
 									{
 										if (DebugOccluderOccludee)
@@ -5934,15 +6762,28 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 								if (PairBlockNum == PureCheckerBoardApproach) 
 								{
 									__m128i* out = (__m128i*)outBlockData;
-									updateBlockMSCBPartial(depth32, blockMask, out, nullptr, pBlockRowHiZ, maxBlockDepth);
+									if (bDrawOccludee && Rasterize_ClippedOccludee_AS_OCCLUDER && !bDrawOccludeeToDepthMap) {
+										updateBlockMSCBPartial_Occludee(depth32, blockMask, out, occluderCache);
+										if (occluderCache->mRasterizedOccludeeVisible)
+											return;
+									}
+									else {
+										updateBlockMSCBPartial(depth32, blockMask, out, nullptr, pBlockRowHiZ, maxBlockDepth);
+									}
 								}
 								else {
 									int bit = blockX & 1;
 									__m128i* out = GetDepthData(outBlockData, bit);
 									uint64_t* maskData = GetMaskData(outBlockData, bit);
 
-
-									updateBlockMSCBPartial(depth32, blockMask, out, maskData, pBlockRowHiZ, maxBlockDepth);
+									if (bDrawOccludee && Rasterize_ClippedOccludee_AS_OCCLUDER && !bDrawOccludeeToDepthMap) {
+										updateBlockMSCBPartial_Occludee(depth32, blockMask, out, occluderCache);
+										if (occluderCache->mRasterizedOccludeeVisible)
+											return;
+									}
+									else {
+										updateBlockMSCBPartial(depth32, blockMask, out, maskData, pBlockRowHiZ, maxBlockDepth);
+									}
 								}
 							}
 							else //full block update
@@ -5963,7 +6804,14 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 									int bit = blockX & 1;
 									out = GetDepthData(outBlockData, bit);
 									uint64_t* maskData = GetMaskData(outBlockData, bit);
-									maskData[0] = -1;
+									if (bDrawOccludee && Rasterize_ClippedOccludee_AS_OCCLUDER && !bDrawOccludeeToDepthMap) {
+										occluderCache->mRasterizedOccludeeVisible = maskData[0] != -1;
+										if(occluderCache->mRasterizedOccludeeVisible) return;
+									}
+									else 
+									{
+										maskData[0] = -1;
+									}
 								}
 								else {
 									out = (__m128i*) outBlockData;
@@ -5985,28 +6833,47 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 										}
 									}
 
-									__m128i	depthBottom = _mm_setr_epi32(depth32[0], depth32[0], depth32[1], depth32[1]);
-									__m128i depthTop = _mm_setr_epi32(depth32[2], depth32[2], depth32[3], depth32[3]);
-									out[0] = depthBottom;
-									out[1] = depthBottom;
-									out[2] = depthTop;
-									out[3] = depthTop;
-									pBlockRowHiZ[0] = minBlockDepth;
+									if (bDrawOccludee && Rasterize_ClippedOccludee_AS_OCCLUDER && !bDrawOccludeeToDepthMap) {
+										occluderCache->mRasterizedOccludeeVisible = true;
+										return;
+									}
+									else {
+										__m128i	depthBottom = _mm_setr_epi32(depth32[0], depth32[0], depth32[1], depth32[1]);
+										__m128i depthTop = _mm_setr_epi32(depth32[2], depth32[2], depth32[3], depth32[3]);
+										out[0] = depthBottom;
+										out[1] = depthBottom;
+										out[2] = depthTop;
+										out[3] = depthTop;
+										pBlockRowHiZ[0] = minBlockDepth;
 
-									pBlockRowHiZ[m_HizBufferSize] = maxBlockDepth;
+										pBlockRowHiZ[m_HizBufferSize] = maxBlockDepth;
+									}
 								}
 								else
 								{
 									__m128i	depthBottom = _mm_setr_epi32(depth32[0], depth32[0], depth32[1], depth32[1]);
 									__m128i depthTop = _mm_setr_epi32(depth32[2], depth32[2], depth32[3], depth32[3]);
-									out[0] = _mm_max_epu16(out[0], depthBottom);
-									out[1] = _mm_max_epu16(out[1], depthBottom);
-									out[2] = _mm_max_epu16(out[2], depthTop);
-									out[3] = _mm_max_epu16(out[3], depthTop);
+
+									if (bDrawOccludee && Rasterize_ClippedOccludee_AS_OCCLUDER && !bDrawOccludeeToDepthMap) {
+										__m128i visible = _mm_cmple_epu16_soc(out[0], depthBottom);
+										visible = _mm_or_si128(visible, _mm_cmple_epu16_soc(out[1], depthBottom));
+										visible = _mm_or_si128(visible, _mm_cmple_epu16_soc(out[2], depthTop));
+										visible = _mm_or_si128(visible, _mm_cmple_epu16_soc(out[3], depthTop));
+										if (_mm_anybit_one_soc(visible)) {
+											occluderCache->mRasterizedOccludeeVisible = true;
+											return;
+										}
+									}
+									else {
+										out[0] = _mm_max_epu16(out[0], depthBottom);
+										out[1] = _mm_max_epu16(out[1], depthBottom);
+										out[2] = _mm_max_epu16(out[2], depthTop);
+										out[3] = _mm_max_epu16(out[3], depthTop);
 
 
-									pBlockRowHiZ[0] = std::max<uint16_t>(minBlockDepth, pBlockRowHiZ[0]);
-									pBlockRowHiZMax[0] = std::max<uint16_t>(maxBlockDepth, pBlockRowHiZMax[0]);
+										pBlockRowHiZ[0] = std::max<uint16_t>(minBlockDepth, pBlockRowHiZ[0]);
+										pBlockRowHiZMax[0] = std::max<uint16_t>(maxBlockDepth, pBlockRowHiZMax[0]);
+									}
 								}
 							}
 						}
@@ -6015,12 +6882,21 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 #if defined( SUPPORT_ALL_FEATURE)
 							if (blockMask != -1 && bPixelAABBClipping)
 							{
-								blockMask &= mPrimitiveBoundaryClip->GetPixelAABBMask(blockX, blockY);
+								blockMask &= PrimitivePixelClip->GetPixelAABBMask(blockX, blockY);
 							}
 							__m128i depthRows[2];
 							depthRows[0] = _mm_setr_epi32(depth32[0], depth32[0], depth32[1], depth32[1]);
 							depthRows[1] = _mm_setr_epi32(depth32[2], depth32[2], depth32[3], depth32[3]);
-							updateBlock(depthRows, blockMask, (__m128i*)(outBlockData), pBlockRowHiZ);
+							if (bDrawOccludee && Rasterize_ClippedOccludee_AS_OCCLUDER && !bDrawOccludeeToDepthMap) {
+								occluderCache->mRasterizedOccludeeVisible = updateBlock_Occludee(depthRows, blockMask, (__m128i*)(outBlockData), pBlockRowHiZ);
+								if (occluderCache->mRasterizedOccludeeVisible)
+								{
+									return;
+								}
+							}
+							else {
+								updateBlock(depthRows, blockMask, (__m128i*)(outBlockData), pBlockRowHiZ);
+							}
 #endif
 						}
 					}
@@ -6055,7 +6931,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 
 					if (blockMask != -1 && bPixelAABBClipping)
 					{
-						blockMask &= mPrimitiveBoundaryClip->GetPixelAABBMask(blockX, blockY);
+						blockMask &= PrimitivePixelClip->GetPixelAABBMask(blockX, blockY);
 					}
 
 					__m128 depthRowDelta = _mm_set1_ps(slope * 0.125f);
@@ -6241,8 +7117,8 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 	}
 }
 
-template <bool possiblyNearClipped, bool bBackFaceCulling>
-void Rasterizer::SplitToTwoTriangles(__m128* X, __m128* Y, __m128* W, __m128* invW, __m128 primitiveValid, int validMask)
+template <bool possiblyNearClipped, bool bBackFaceCulling, bool bDrawOccludee>
+void Rasterizer::SplitToTwoTriangles(__m128* X, __m128* Y, __m128* W, __m128* invW, __m128 primitiveValid, int validMask, OccluderRenderCache* occluderCache)
 {
 	if (DebugOccluderOccludee)
 	{
@@ -6269,23 +7145,27 @@ void Rasterizer::SplitToTwoTriangles(__m128* X, __m128* Y, __m128* W, __m128* in
 			{
 				// Move index and mask to next set bit
 				uint32_t fromIdx = pValidIdx & 3;
+				uint32_t fromIdx2 = fromIdx | 8;
+				uint32_t fromIdx3 = fromIdx | 12;
 				uint32_t updateIdx = pInvalidIdx & 3;
+				uint32_t updateIdx2 = updateIdx | 4;
+				uint32_t updateIdx3 = updateIdx | 8;
 
 				Xf[updateIdx] = Xf[fromIdx];
-				Xf[updateIdx | 4] = Xf[fromIdx | 8];
-				Xf[updateIdx | 8] = Xf[fromIdx | 12];
+				Xf[updateIdx2] = Xf[fromIdx2];
+				Xf[updateIdx3] = Xf[fromIdx3];
 
 				Yf[updateIdx] = Yf[fromIdx];
-				Yf[updateIdx | 4] = Yf[fromIdx | 8];
-				Yf[updateIdx | 8] = Yf[fromIdx | 12];
+				Yf[updateIdx2] = Yf[fromIdx2];
+				Yf[updateIdx3] = Yf[fromIdx3];
 
 				Wf[updateIdx] = Wf[fromIdx];
-				Wf[updateIdx | 4] = Wf[fromIdx | 8];
-				Wf[updateIdx | 8] = Wf[fromIdx | 12];
+				Wf[updateIdx2] = Wf[fromIdx2];
+				Wf[updateIdx3] = Wf[fromIdx3];
 
 				invWf[updateIdx] = invWf[fromIdx];
-				invWf[updateIdx | 4] = invWf[fromIdx | 8];
-				invWf[updateIdx | 8] = invWf[fromIdx | 12];
+				invWf[updateIdx2] = invWf[fromIdx2];
+				invWf[updateIdx3] = invWf[fromIdx3];
 
 				validf[updateIdx] = -0.0f;
 
@@ -6297,7 +7177,7 @@ void Rasterizer::SplitToTwoTriangles(__m128* X, __m128* Y, __m128* W, __m128* in
 			{
 				primitiveValid = _mm_and_ps(primitiveValid, _mm_xor_ps(_mm_and_ps(_mm_and_ps(W[2], W[0]), W[1]), _mm_set1_ps(-0.0f)));
 			}
-			drawTriangle< possiblyNearClipped, bBackFaceCulling>(X, Y, invW, W, primitiveValid);
+			drawTriangle< possiblyNearClipped, bBackFaceCulling, bDrawOccludee>(X, Y, invW, W, primitiveValid, occluderCache);
 
 			if (DebugOccluderOccludee) {
 				DebugData[QuadToTriangleMerge] ++;
@@ -6329,16 +7209,22 @@ void Rasterizer::SplitToTwoTriangles(__m128* X, __m128* Y, __m128* W, __m128* in
 			invW2[0] = invW[0];
 			invW2[1] = invW[2];
 			invW2[2] = invW[3];
-			drawTriangle< possiblyNearClipped, bBackFaceCulling>(X2, Y2, invW2, W2, primitiveValid);
+			drawTriangle< possiblyNearClipped, bBackFaceCulling, bDrawOccludee>(X2, Y2, invW2, W2, primitiveValid, occluderCache);
+			if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+				return;
 			if (DebugOccluderOccludee)
 			{
 				DebugData[PrimitiveValidNum] = DebugData[PrimitiveValidNumQuad];
 			}
-			drawTriangle< possiblyNearClipped, bBackFaceCulling>(X, Y, invW, W, primitiveValid);
+			drawTriangle< possiblyNearClipped, bBackFaceCulling, bDrawOccludee>(X, Y, invW, W, primitiveValid, occluderCache);
+			if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+				return;
 		}
 		else
 		{
-			drawTriangle< possiblyNearClipped, bBackFaceCulling>(X, Y, invW, W, primitiveValid);
+			drawTriangle< possiblyNearClipped, bBackFaceCulling, bDrawOccludee>(X, Y, invW, W, primitiveValid, occluderCache);
+			if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+				return;
 			X[1] = X[0];
 			Y[1] = Y[0];
 			invW[1] = invW[0];
@@ -6348,7 +7234,9 @@ void Rasterizer::SplitToTwoTriangles(__m128* X, __m128* Y, __m128* W, __m128* in
 			{
 				DebugData[PrimitiveValidNum] = DebugData[PrimitiveValidNumQuad];
 			}
-			drawTriangle< possiblyNearClipped, bBackFaceCulling>(X + 1, Y + 1, invW + 1, W + 1, primitiveValid);
+			drawTriangle< possiblyNearClipped, bBackFaceCulling, bDrawOccludee>(X + 1, Y + 1, invW + 1, W + 1, primitiveValid, occluderCache);
+			if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+				return;
 		}
 	}
 	else 
@@ -6376,7 +7264,9 @@ void Rasterizer::SplitToTwoTriangles(__m128* X, __m128* Y, __m128* W, __m128* in
 				invW2[0] = invW[0];
 				invW2[1] = invW[2];
 				invW2[2] = invW[3];
-				drawTriangle< possiblyNearClipped, bBackFaceCulling>(X2, Y2, invW2, W2, primitiveValid0);
+				drawTriangle< possiblyNearClipped, bBackFaceCulling, bDrawOccludee>(X2, Y2, invW2, W2, primitiveValid0, occluderCache);
+				if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+					return;
 			}
 		}
 
@@ -6389,7 +7279,9 @@ void Rasterizer::SplitToTwoTriangles(__m128* X, __m128* Y, __m128* W, __m128* in
 			{
 				DebugData[PrimitiveValidNum] = DebugData[PrimitiveValidNumQuad];
 			}
-			drawTriangle< possiblyNearClipped, bBackFaceCulling>(X, Y, invW, W, primitiveValid0);
+			drawTriangle< possiblyNearClipped, bBackFaceCulling, bDrawOccludee>(X, Y, invW, W, primitiveValid0, occluderCache);
+			if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+				return;
 		}
 
 		if (bBackFaceCulling == true)
@@ -6406,7 +7298,9 @@ void Rasterizer::SplitToTwoTriangles(__m128* X, __m128* Y, __m128* W, __m128* in
 				{
 					DebugData[PrimitiveValidNum] = DebugData[PrimitiveValidNumQuad];
 				}
-				drawTriangle< possiblyNearClipped, bBackFaceCulling>(X + 1, Y + 1, invW + 1, W + 1, primitiveValid0);
+				drawTriangle< possiblyNearClipped, bBackFaceCulling, bDrawOccludee>(X + 1, Y + 1, invW + 1, W + 1, primitiveValid0, occluderCache);
+				if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+					return;
 			}
 		}
 	}
@@ -6415,6 +7309,14 @@ void Rasterizer::SplitToTwoTriangles(__m128* X, __m128* Y, __m128* W, __m128* in
 //draw point p, q here
 void Rasterizer::drawLine(float* p, float*q) 
 {
+	float ratio = MeshLineScale;
+	if(ratio != 1.0f)
+	{
+		p[0] = (p[0] - m_width * 0.5f) * ratio + m_width * 0.5f;
+		p[1] = (p[1] - m_height * 0.5f) * ratio + m_height * 0.5f;
+		q[0] = (q[0] - m_width * 0.5f) * ratio + m_width * 0.5f;
+		q[1] = (q[1] - m_height * 0.5f) * ratio + m_height * 0.5f;
+	}
 	if (p[0] > q[0])
 	{
 		std::swap(p, q);
@@ -6570,6 +7472,7 @@ void Rasterizer::drawPixelSafe(int x, int y, float zf)
 
 	z = std::min<uint16_t>(65535, z + 256);//move forward the value
 
+	if (mDebugRenderType == MeshLine) z = 65535;
 	int pixelIdx = y * this->m_width + x;
 	m_depthBufferPointLines[pixelIdx] = std::max<uint16_t>(m_depthBufferPointLines[pixelIdx], z);
 	if(bDebugOccluderOnly){
@@ -6597,7 +7500,7 @@ void Rasterizer::drawPixel(int x, int y, float zf)
 
 
 template <int PrimitveEdgeNum>
-void Rasterizer::HandleDrawMode(__m128* x, __m128* y, __m128* z, uint32_t alivePrimitive)
+void Rasterizer::HandleDrawMode(__m128* x, __m128* y, __m128* z, uint32_t alivePrimitive, OccluderRenderCache* OccluderCache)
 {	
 	__m128 z2[3];
 	if (PrimitveEdgeNum == 3)
@@ -6606,8 +7509,8 @@ void Rasterizer::HandleDrawMode(__m128* x, __m128* y, __m128* z, uint32_t aliveP
 		__m128* invW = z;
 		z = z2;
 
-		__m128 c0 = mOccluderCache.c0;
-		__m128 c1 = mOccluderCache.c1;
+		__m128 c0 = OccluderCache->c0;
+		__m128 c1 = OccluderCache->c1;
 		z[0] = _mm_fmadd_ps(invW[0], c1, c0);
 		z[1] = _mm_fmadd_ps(invW[1], c1, c0);
 		z[2] = _mm_fmadd_ps(invW[2], c1, c0);
@@ -6656,50 +7559,75 @@ void Rasterizer::HandleDrawMode(__m128* x, __m128* y, __m128* z, uint32_t aliveP
 			q[1] = fpy[idx];
 			q[2] = fpz[idx];
 
-			if (p[2] > 0 && q[2] > 0)
-			{
-				drawLine(p, q);
+			if (q[2] < 0 && p[2] < 0)  continue;
+			float flipRatio = 10.0f;  //this value could be infinite
+			if (p[2] < 0) {
+				p[0] = q[0] + (q[0] - p[0]) * flipRatio;
+				p[1] = q[1] + (q[1] - p[1]) * flipRatio;
 			}
-			else 
-			{
-				if (p[2] > 0)
-				{
-					drawPixel((int)p[0], (int)p[1], p[2]);
-				}
-				if (q[2] > 0)
-				{
-					drawPixel((int)q[0], (int)q[1], q[2]);
-				}
+			if (q[2] < 0) {
+				q[0] = p[0] + (p[0] - q[0]) * flipRatio;
+				q[1] = p[1] + (p[1] - q[1]) * flipRatio;
 			}
-			
+			drawLine(p, q);
+
 		}
 	} while (alivePrimitive != 0);
 }
 
-template void Rasterizer::rasterize<0>(common::OccluderMesh& raw);
-template void Rasterizer::rasterize<1>(common::OccluderMesh& raw);
-template void Rasterizer::rasterize<2>(common::OccluderMesh& raw);
-template void Rasterizer::rasterize<3>(common::OccluderMesh& raw);
+template void Rasterizer::rasterize<0>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<1>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<2>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<3>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
 //template void Rasterizer::rasterize<4>(common::OccluderMesh& raw);
-template void Rasterizer::rasterize<5>(common::OccluderMesh& raw);
+template void Rasterizer::rasterize<5>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
 //template void Rasterizer::rasterize<6>(common::OccluderMesh& raw);
-template void Rasterizer::rasterize<7>(common::OccluderMesh& raw);
-template void Rasterizer::rasterize<8>(common::OccluderMesh& raw);
-template void Rasterizer::rasterize<9>(common::OccluderMesh& raw);
-template void Rasterizer::rasterize<10>(common::OccluderMesh& raw);
-template void Rasterizer::rasterize<11>(common::OccluderMesh& raw);
+template void Rasterizer::rasterize<7>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<8>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<9>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<10>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<11>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
 //template void Rasterizer::rasterize<12>(common::OccluderMesh& raw);
-template void Rasterizer::rasterize<13>(common::OccluderMesh& raw);
+template void Rasterizer::rasterize<13>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
 //template void Rasterizer::rasterize<14>(common::OccluderMesh& raw);
-template void Rasterizer::rasterize<15>(common::OccluderMesh& raw);
+template void Rasterizer::rasterize<15>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+
+
+template void Rasterizer::rasterize<16>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<17>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<18>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<19>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+//template void Rasterizer::rasterize<4>(common::OccluderMesh& raw);
+template void Rasterizer::rasterize<21>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+//template void Rasterizer::rasterize<6>(common::OccluderMesh& raw);
+template void Rasterizer::rasterize<23>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<24>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<25>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<26>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<27>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+//template void Rasterizer::rasterize<12>(common::OccluderMesh& raw);
+template void Rasterizer::rasterize<29>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+//template void Rasterizer::rasterize<14>(common::OccluderMesh& raw);
+template void Rasterizer::rasterize<31>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
 
 
 
 
-template bool Rasterizer::queryVisibility<true, false, false>(const float* minmaxf);
-template bool Rasterizer::queryVisibility<false, true, false>(const float* minmaxf);
-template bool Rasterizer::queryVisibility<false, false, false>(const float* minmaxf);
-template bool Rasterizer::queryVisibility<false, true, true>(const float* minmaxf);
+template bool Rasterizer::queryVisibility<true, false, false>(const float* minmaxf, OccluderRenderCache* OccluderCache);
+template bool Rasterizer::queryVisibility<false, true, false>(const float* minmaxf, OccluderRenderCache* OccluderCache);
+template bool Rasterizer::queryVisibility<false, false, false>(const float* minmaxf, OccluderRenderCache* OccluderCache);
+template bool Rasterizer::queryVisibility<false, true, true>(const float* minmaxf, OccluderRenderCache* OccluderCache);
+
+
+
+template bool Rasterizer::queryVisibility_OBB<false, true, false>(const float* minmaxf);
+template bool Rasterizer::queryVisibility_OBB<false, false, false>(const float* minmaxf);
+template bool Rasterizer::queryVisibility_OBB<false, true, true>(const float* minmaxf);
+
+
+template bool Rasterizer::queryVisibility_QUAD<true, false>(const float* minmaxf);
+template bool Rasterizer::queryVisibility_QUAD<false, false>(const float* minmaxf);
+template bool Rasterizer::queryVisibility_QUAD<true, true>(const float* minmaxf);
 
 
 template bool Rasterizer::query2D<true, false>(uint32_t minX, uint32_t maxX, uint32_t minY, uint32_t maxY, uint16_t maxZ);
@@ -6708,38 +7636,42 @@ template bool Rasterizer::query2D<false, false>(uint32_t minX, uint32_t maxX, ui
 
 
 
-template void Rasterizer::batchQueryWithTree<true, true>(const float * bbox, unsigned int nMesh, bool * results);
-template void Rasterizer::batchQueryWithTree<true, false>(const float * bbox, unsigned int nMesh, bool * results);
-template void Rasterizer::batchQueryWithTree<false, true>(const float * bbox, unsigned int nMesh, bool * results);
-template void Rasterizer::batchQueryWithTree<false, false>(const float * bbox, unsigned int nMesh, bool * results);
+template void Rasterizer::batchQueryWithTree<true, true>(const float * bbox, unsigned int nMesh, bool * results, bool obbMode);
+template void Rasterizer::batchQueryWithTree<true, false>(const float * bbox, unsigned int nMesh, bool * results, bool obbMode);
+template void Rasterizer::batchQueryWithTree<false, true>(const float * bbox, unsigned int nMesh, bool * results, bool obbMode);
+template void Rasterizer::batchQueryWithTree<false, false>(const float * bbox, unsigned int nMesh, bool * results, bool obbMode);
 
 
-template  void Rasterizer::batchQuery<true>(const float * bbox, unsigned int nMesh, bool * results);
-template  void Rasterizer::batchQuery<false>(const float * bbox, unsigned int nMesh, bool * results);
+template  void Rasterizer::batchQuery<true>(const float * bbox, unsigned int nMesh, bool * results, bool obbMode);
+template  void Rasterizer::batchQuery<false>(const float * bbox, unsigned int nMesh, bool * results, bool obbMode);
 
-template void Rasterizer::HandleDrawMode<3>(__m128* x, __m128* y, __m128* z, uint32_t alivePrimitive);
-template void Rasterizer::HandleDrawMode<4>(__m128* x, __m128* y, __m128* z, uint32_t alivePrimitive);
+template void Rasterizer::HandleDrawMode<3>(__m128* x, __m128* y, __m128* z, uint32_t alivePrimitive, OccluderRenderCache* OccluderCache);
+template void Rasterizer::HandleDrawMode<4>(__m128* x, __m128* y, __m128* z, uint32_t alivePrimitive, OccluderRenderCache* OccluderCache);
 
-template void Rasterizer::drawTriangle<true, true>(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128 primitiveValid);
-template void Rasterizer::drawTriangle<false, true>(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128 primitiveValid);
-template void Rasterizer::drawTriangle<true, false>(__m128* x, __m128* y, __m128* invW, __m128* W, __m128 primitiveValid);
-template void Rasterizer::drawTriangle<false, false>(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128 primitiveValid);
+template void Rasterizer::drawTriangle<true, true, false>(__m128* x, __m128* y, __m128* invW, __m128* W, __m128 primitiveValid, OccluderRenderCache* occluderCache);
+template void Rasterizer::drawTriangle<false, true, false>(__m128* x, __m128* y, __m128* invW, __m128* W, __m128 primitiveValid, OccluderRenderCache* occluderCache);
+template void Rasterizer::drawTriangle<true, false, false>(__m128* x, __m128* y, __m128* invW, __m128* W, __m128 primitiveValid, OccluderRenderCache* occluderCache);
+template void Rasterizer::drawTriangle<false, false, false>(__m128* x, __m128* y, __m128* invW, __m128* W, __m128 primitiveValid, OccluderRenderCache* occluderCache);
+template void Rasterizer::drawTriangle<true, true, true>(__m128* x, __m128* y, __m128* invW, __m128* W, __m128 primitiveValid, OccluderRenderCache* occluderCache);
+template void Rasterizer::drawTriangle<false, true, true>(__m128* x, __m128* y, __m128* invW, __m128* W, __m128 primitiveValid, OccluderRenderCache* occluderCache);
+template void Rasterizer::drawTriangle<true, false, true>(__m128* x, __m128* y, __m128* invW, __m128* W, __m128 primitiveValid, OccluderRenderCache* occluderCache);
 
-template void Rasterizer::drawQuad<true>(__m128 * x, __m128 * y, __m128 * invW, __m128 * W, __m128 primitiveValid, __m128* edgeNormalsX, __m128* edgeNormalsY, __m128* areas);
+template void Rasterizer::drawQuad<true, false>(__m128* x, __m128* y, __m128* invW, __m128* W, __m128 primitiveValid, __m128* edgeNormalsX, __m128* edgeNormalsY, __m128* areas, OccluderRenderCache* occluderCache);
+template void Rasterizer::drawQuad<true, true>(__m128* x, __m128* y, __m128* invW, __m128* W, __m128 primitiveValid, __m128* edgeNormalsX, __m128* edgeNormalsY, __m128* areas, OccluderRenderCache* occluderCache);
 ////template void Rasterizer::drawQuad<false>(__m128 * x, __m128 * y, __m128 * invW, __m128 * W, __m128 primitiveValid, __m128* edgeNormalsX, __m128* edgeNormalsY, __m128* areas);
 
 
-template void Rasterizer::SplitToTwoTriangles<true, true>(__m128* X, __m128* Y, __m128* W, __m128* invW, __m128 primitiveValid, int validMask);
-template void Rasterizer::SplitToTwoTriangles<true, false>(__m128* X, __m128* Y, __m128* W, __m128* invW, __m128 primitiveValid, int validMask);
-template void Rasterizer::SplitToTwoTriangles<false, true>(__m128* X, __m128* Y, __m128* W, __m128* invW, __m128 primitiveValid, int validMask);
-template void Rasterizer::SplitToTwoTriangles<false, false>(__m128* X, __m128* Y, __m128* W, __m128* invW, __m128 primitiveValid, int validMask);
+template void Rasterizer::SplitToTwoTriangles<true, true, true>(__m128* X, __m128* Y, __m128* W, __m128* invW, __m128 primitiveValid, int validMask, OccluderRenderCache* occluderCache);
+template void Rasterizer::SplitToTwoTriangles<true, false, true>(__m128* X, __m128* Y, __m128* W, __m128* invW, __m128 primitiveValid, int validMask, OccluderRenderCache* occluderCache);
+template void Rasterizer::SplitToTwoTriangles<false, true, true>(__m128* X, __m128* Y, __m128* W, __m128* invW, __m128 primitiveValid, int validMask, OccluderRenderCache* occluderCache);
+template void Rasterizer::SplitToTwoTriangles<false, false, true>(__m128* X, __m128* Y, __m128* W, __m128* invW, __m128 primitiveValid, int validMask, OccluderRenderCache* occluderCache);
+template void Rasterizer::SplitToTwoTriangles<true, true, false>(__m128* X, __m128* Y, __m128* W, __m128* invW, __m128 primitiveValid, int validMask, OccluderRenderCache* occluderCache);
+template void Rasterizer::SplitToTwoTriangles<true, false, false>(__m128* X, __m128* Y, __m128* W, __m128* invW, __m128 primitiveValid, int validMask, OccluderRenderCache* occluderCache);
+template void Rasterizer::SplitToTwoTriangles<false, true, false>(__m128* X, __m128* Y, __m128* W, __m128* invW, __m128 primitiveValid, int validMask, OccluderRenderCache* occluderCache);
+template void Rasterizer::SplitToTwoTriangles<false, false, false>(__m128* X, __m128* Y, __m128* W, __m128* invW, __m128 primitiveValid, int validMask, OccluderRenderCache* occluderCache);
 
-void PrimitiveBoundaryClipCache::calculateMask()
+void PixelMaskBound::calculateMask()
 {
-	MinYBoundary[0] = -1;
-	MaxYBoundary[0] = -1;
-	MinXBoundary[0] = -1;
-	MaxXBoundary[0] = -1;
 
 	//rowMask |= 1 << (8 * x + (7 - y));
 	uint64_t yMask = 255;
@@ -6792,3 +7724,4 @@ void PrimitiveBoundaryClipCache::calculateMask()
 }
 
 } // namespace util
+#endif

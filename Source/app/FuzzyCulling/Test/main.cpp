@@ -158,7 +158,6 @@ int main(int argc, char **argv)
 			allCaptures.push_back("SuntemplePackNearClipBugUnrollPartialQuad.cap");
 			allCaptures.push_back("SuntempleOccludeeNeedMaxClampBug.cap");
 			allCaptures.push_back("SuntempleLargeSlope.cap");
-			allCaptures.push_back("SuntempleInterleaveBug.cap");
 			allCaptures.push_back("SuntempleFloorBug.cap");
 			allCaptures.push_back("SuntempleCeil.cap");
 			allCaptures.push_back("SuntempleBug2.cap");
@@ -207,8 +206,8 @@ int main(int argc, char **argv)
 
 			//algos.push_back( (interleave << 8) + renderMode * 2048 + compressMode * 16 + 2);
 			compressMode = 0;
-			algos.push_back( (interleave << 8) + renderMode * 2048 + compressMode * 16 + 3);
-			interleave = 2;
+			algos.push_back((interleave << 8) + renderMode * 2048 + compressMode * 16 + 3);
+			compressMode = 1;
 			algos.push_back( (interleave << 8) + renderMode * 2048 + compressMode * 16 + 4);
 
 
@@ -314,8 +313,8 @@ int main(int argc, char **argv)
 					else
 					{
 						float current = allTimes[idx];
-						float imoc = allTimes[idx / totalAlgo * totalAlgo];
-						std::cout << s << " Ratio " << imoc / current << std::endl;
+						float ref = allTimes[idx / totalAlgo * totalAlgo];
+						std::cout << s << " Ratio " << ref / current << std::endl;
 					}
 					idx++;
 				}

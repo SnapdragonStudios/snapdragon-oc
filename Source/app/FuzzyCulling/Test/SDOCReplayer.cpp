@@ -52,18 +52,22 @@ static void LOGI(const char* format, ...)
 #endif
 
 
+	static constexpr int nOcludeeOBBSize = 18;   //Debug: change to 12 if input only 4 points, otherwise 18
 struct OccludeeGroup
 {
 	// for batch query
 	struct OccludeeBatch
 	{
-		OccludeeBatch(uint32_t num)
-		{
-			Number = num;
-			data.resize(num * 6);
-		}
 		std::vector<float> data;
 		uint32_t Number = 0;
+		bool mObbQuery = false;
+		void updateSize(unsigned int nOccludee, int perUnitSize)
+		{
+			this->mObbQuery = perUnitSize == 18;
+			this->Number = nOccludee;
+			this->data.resize(nOccludee * perUnitSize);
+		}
+
 	};
 	std::vector<OccludeeBatch*> Batches;
 
@@ -127,7 +131,6 @@ public:
 		unsigned int nIdx = 0;
 		float localToWorld[16];
 
-		unsigned int CompactSize;
 		unsigned short* CompactData = nullptr;
 
 		~OccluderData()
@@ -143,12 +146,8 @@ public:
 
 			int outputCompressSize = 0;
 			auto initStartTime = std::chrono::high_resolution_clock::now();
-			unsigned short * output = sdocMeshBake(&outputCompressSize, this->Vertices, this->Indices, this->VerticesNum, this->nIdx, 15, true, true, 0);
-			if(output != nullptr)
-			{
-				CompactData = new unsigned short[outputCompressSize];
-				memcpy(CompactData, output, outputCompressSize * sizeof(short));
-			}
+			CompactData = sdocMeshBake(&outputCompressSize, this->Vertices, this->Indices, this->VerticesNum, this->nIdx, 15, true, true, 0);
+			
 			auto time = (int)std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - initStartTime).count();
 			LOGI("Total Bake Time(ms) used %f  Face  %d  VerticesNum %d", (time * 1.0 / 1000), nIdx/3, VerticesNum);
 		}
@@ -160,10 +159,12 @@ public:
 	{
 		std::vector<float> data;
 		uint32_t Number = 0;
-		void updateSize(unsigned int nOccludee)
+		bool obbQuery = false;
+		void updateSize(unsigned int nOccludee, int perUnitSize)
 		{
+			this->obbQuery = perUnitSize > 6;
 			this->Number = nOccludee;
-			this->data.resize(nOccludee * 6);
+			this->data.resize(nOccludee * perUnitSize);
 		}
 
 	};
@@ -175,12 +176,17 @@ public:
 		float ViewProj[16];
 
 		std::vector<OccluderData*>  Occluders;
+		std::vector<OccluderData*>  OccludeeMeshes;
 		std::vector<OccludeeBatch*> Occludees;
 		~CapturedFrameData()
 		{
 			for (int i = 0; i < Occluders.size(); i++) {
 				OccluderData* occ = Occluders[i];
 				delete occ;
+			}
+
+			for (int i = 0; i < OccludeeMeshes.size(); i++) {
+				delete OccludeeMeshes[i];
 			}
 
 			for (int i = 0; i < Occludees.size(); i++) {
@@ -232,7 +238,7 @@ public:
 		return false;
 	}
 
-	void loadBatchedOccludee(std::ifstream& fin, std::vector<OccludeeBatch*>& batches)
+	void loadBatchedOccludee(std::ifstream& fin, std::vector<OccludeeBatch*>& batches, int perUnitSize)
 	{
 		std::string line;
 		// get the number
@@ -242,7 +248,7 @@ public:
 		unsigned int nOccludee = 0;
 		fin >> nOccludee;
 		std::getline(fin, line);
-		batch->updateSize(nOccludee);
+		batch->updateSize(nOccludee, perUnitSize);
 		float* arr = &batch->data[0];
 
 		for (unsigned int i_box = 0; i_box < nOccludee; ++i_box, arr += BBOX_STRIDE)
@@ -254,8 +260,23 @@ public:
 
 			fin >> arr[3] >> arr[4] >> arr[5];
 			std::getline(fin, line);
+
+			if (perUnitSize >= 12) {
+				arr += BBOX_STRIDE;
+				fin >> arr[0] >> arr[1] >> arr[2];
+				std::getline(fin, line);
+				fin >> arr[3] >> arr[4] >> arr[5];
+				std::getline(fin, line);
+			}
+			if (perUnitSize >= 18) {
+				arr += BBOX_STRIDE;
+				fin >> arr[0] >> arr[1] >> arr[2];
+				std::getline(fin, line);
+				fin >> arr[3] >> arr[4] >> arr[5];
+				std::getline(fin, line);
+			}
 		}
-		std::cout << "nOcc " << nOccludee << std::endl;
+		//std::cout << "nOcc " << nOccludee << std::endl;
 	}
 	SDOCLoader()
 	{
@@ -263,7 +284,7 @@ public:
 	}
 
 
-	void loadCompactOccluder(std::ifstream& fin, std::vector<OccluderData*>& occluders)
+	void loadCompactOccluder(std::ifstream& fin, std::vector<OccluderData*>& occluders, std::vector<OccluderData*>& occludeeMeshes, bool occludee)
 	{
 		std::string line;
 		int n128;
@@ -272,7 +293,10 @@ public:
 
 		//std::cout << "compact line " << n128 << std::endl;
 		OccluderData *occ = new OccluderData(this->OccluderID++);
-		occluders.push_back(occ);
+		if (occludee)
+			occludeeMeshes.push_back(occ);
+		else
+			occluders.push_back(occ);
 		occ->CompactData = new unsigned short[n128 * 8];
 		uint16_t* data = (uint16_t*)occ->CompactData;
 		for (int i_vert = 0; i_vert < n128; ++i_vert, data += 8)
@@ -287,12 +311,14 @@ public:
 		return;
 	}
 
-	void loadOccluder(std::ifstream& fin, std::vector<OccluderData*>& occluders)
+	void loadOccluder(std::ifstream& fin, std::vector<OccluderData*>& occluders, std::vector<OccluderData*>& OccludeeMeshes, bool isOccludee)
 	{
 		std::string line;
 		// load number of vertices and number of faces
 		OccluderData *occ = new OccluderData(this->OccluderID++);
-		occluders.push_back(occ);
+		if (isOccludee)
+			OccludeeMeshes.push_back(occ);
+		else occluders.push_back(occ);
 		int nVert, nFace;
 		fin >> nVert >> nFace;
 		occ->backfaceCull = nVert < 10000000;
@@ -326,7 +352,10 @@ public:
 
 		// load LocalToWorld Matrix
 		loadMatrix(fin, occ->localToWorld);
-		occ->CompressModel();
+		if (isOccludee == false)
+			occ->CompressModel();
+		else
+			occ->CompressModel();
 	}
 
 	bool load(const std::string& file_path)
@@ -399,15 +428,19 @@ public:
 
 			if (line.find("CompactOccluder") != std::string::npos)
 			{
-				loadCompactOccluder(fin, f.Occluders);
+				loadCompactOccluder(fin, f.Occluders, f.OccludeeMeshes, line.find("Query") != std::string::npos);
 			}
 			else if (line.find("Occluder") != std::string::npos)
 			{
-				loadOccluder(fin, f.Occluders);
+				loadOccluder(fin, f.Occluders, f.OccludeeMeshes, line.find("Query") != std::string::npos);
 			}
 			else if (line.find("Batched Occludee") != std::string::npos)
 			{
-				loadBatchedOccludee(fin, f.Occludees);
+				loadBatchedOccludee(fin, f.Occludees, 6);
+			}
+			else if (line.find("Batched OccludeeOBB") != std::string::npos)
+			{
+				loadBatchedOccludee(fin, f.Occludees, nOcludeeOBBSize);
 			}
 		} while (fin.eof() == false);
 
@@ -448,6 +481,7 @@ void ReplayFrame(SDOCLoader* dataProvider, int mode, int frameNum, int saveFrame
 	unsigned int width = dataProvider->Width;
 	unsigned int height = dataProvider->Height;
 
+	//width = 512;
 	pSDOC = sdocInit(width, height, 1.0f);
 	sdocSet(pSDOC, SDOC_SetCCW, dataProvider->CCW);
 	std::cout << "Counter Clock Wise set to " << dataProvider->CCW << std::endl;
@@ -548,13 +582,38 @@ void ReplayFrame(SDOCLoader* dataProvider, int mode, int frameNum, int saveFrame
 				allResultsLength = 2 * totalQueryNum;
 				allResults = new bool[allResultsLength];
 			}
-			sdocQueryOccludees(pSDOC, &batch->data[0], batch->Number, allResults);
-
-			for (int idx = 0; idx < totalQueryNum; idx++)
+			if(batch->obbQuery == false)
+				sdocQueryOccludees(pSDOC, &batch->data[0], batch->Number, allResults);
+			else
+				sdocQueryOccludees_OBB(pSDOC, &batch->data[0], batch->Number, allResults);
+			for (uint32_t idx = 0; idx < batch->Number; idx++)
 			{
 				visibleNum += (int)(allResults[idx] == true);
 			}
 		}
+		for (int occIdx = 0; occIdx < frame->OccludeeMeshes.size(); occIdx++)
+		{
+			bool visible = false;
+			totalQueryNum++;
+			auto occ = frame->OccludeeMeshes[occIdx];
+			if (occ->CompactData == nullptr)
+			{
+				{
+					if (occ->Indices == nullptr) {
+						visible = sdocQueryOccludeeMesh(pSDOC, (float*)(occ->CompactData), nullptr, 0, 0, occ->localToWorld, true, nullptr);
+					}
+					else {
+						visible = sdocQueryOccludeeMesh(pSDOC, occ->Vertices, occ->Indices, occ->VerticesNum, occ->nIdx, occ->localToWorld, occ->backfaceCull, nullptr);
+					}
+				}
+			}
+			else
+			{
+				visible = sdocQueryOccludeeMesh(pSDOC, (float*)(occ->CompactData), nullptr, 0, 0, occ->localToWorld, true, nullptr);
+			}
+			visibleNum += visible;
+		}
+
 		totalQuery = totalQueryNum;
 
 		end = std::chrono::high_resolution_clock::now();

@@ -70,7 +70,7 @@ void sdocRenderBakedOccluder(void *pSDOC, unsigned short *compressedModel, const
 	if (instance->m_frameInfo->mIsRecording)
 	{
 		bool backfaceCull = true; //this info is not used in backed model recording
-		instance->m_frameInfo->RecordOccluder((float*)compressedModel, nullptr, 0, 0, localToWorld, backfaceCull);
+		instance->m_frameInfo->RecordOccluder((float*)compressedModel, nullptr, 0, 0, localToWorld, backfaceCull, "");
 	}
 }
 void sdocRenderOccluder(void*pSDOC, const float *vertices, const unsigned short *indices, unsigned int nVert, unsigned int nIdx, const float *localToWorld, bool backfaceCull)
@@ -87,18 +87,39 @@ void sdocRenderOccluder(void*pSDOC, const float *vertices, const unsigned short 
 	{
 		if (validMesh)
 		{
-			instance->m_frameInfo->RecordOccluder(vertices, indices, nVert, nIdx, localToWorld, backfaceCull);
+			instance->m_frameInfo->RecordOccluder(vertices, indices, nVert, nIdx, localToWorld, backfaceCull, "");
 		}
 	}
+}
+
+bool sdocQueryOccludeeMesh(void* pSDOC, const float* vertices, const unsigned short* indices, unsigned int nVert, unsigned int nIdx, const float* localToWorld, bool backfaceCull, const float* worldAABB)
+{
+
+	SOCPrivate* instance = (SOCPrivate*)pSDOC;
+	if (instance == nullptr)
+	{
+		return false;
+	}
+	//direct call rapid rasterizer
+	bool visible = instance->m_rapidRasterizer->QueryRawOccludee(vertices, indices, nVert, nIdx, localToWorld, backfaceCull, worldAABB);
+	if (instance->m_frameInfo->mIsRecording)
+	{
+		instance->m_frameInfo->RecordOccluder(vertices, indices, nVert, nIdx, localToWorld, backfaceCull, "Query");
+	}
+	return visible;
 }
 
 #if defined(SDOC_NATIVE)
 
 unsigned short* sdocMeshBake( int* outputCompressSize, const float *vertices, const unsigned short *indices, unsigned int nVert, unsigned int nIdx,   float quadAngle, bool enableBackfaceCull, bool counterClockWise, int TerrainGridAxisPoint)
 {
+	if (vertices == nullptr && indices == nullptr && nVert == 0 && nIdx == 0 && quadAngle == 0) {
+		unsigned short* mem = (unsigned short*)outputCompressSize;
+		delete[] mem;
+		return nullptr;
+	}
 		if (outputCompressSize == nullptr) {
-
-			util::OccluderQuad::OfflineTestClearBakeBuffer();			return nullptr;
+			return nullptr;
 		}
 
 		unsigned short* data = util::OccluderQuad::sdocMeshLodBake(outputCompressSize, vertices, indices, nVert, nIdx, quadAngle, enableBackfaceCull, counterClockWise, TerrainGridAxisPoint);
@@ -133,7 +154,7 @@ bool sdocQueryOccludees(void * pSDOC, const float *bbox, unsigned int nMesh, boo
 	}
 
 	///////batchQuery would do input check
-	return instance->batchQuery(bbox, nMesh, results);
+	return instance->batchQuery(bbox, nMesh, results, false);
 }
 static void CheckRecording(SOCPrivate *instance, int occluderNum) 
 {
@@ -150,9 +171,14 @@ static void CheckRecording(SOCPrivate *instance, int occluderNum)
 			{
 				continue;
 			}
-
-			instance->m_frameInfo->RecordOccluder(occ->inVtx, occ->inIdx, occ->nVert, occ->nIdx,
-				occ->modelWorld,  occ->backfaceCull);
+			if (occ->IsOccludee) {
+				instance->m_frameInfo->RecordOccluder(occ->inVtx, occ->inIdx, occ->nVert, occ->nIdx,
+					occ->modelWorld, occ->backfaceCull, "Query");
+			}
+			else {
+				instance->m_frameInfo->RecordOccluder(occ->inVtx, occ->inIdx, occ->nVert, occ->nIdx,
+					occ->modelWorld, occ->backfaceCull, "");
+			}
 		}
 
 	}
@@ -168,7 +194,8 @@ bool sdocSet(void*pSDOC, unsigned int ID, unsigned int configValue)
 
 	switch (ID)
 	{
-
+		
+		
 	case SDOC_BeforeQueryTreatTrueAsCulled:
 		instance->m_rapidRasterizer->BeforeQueryTreatTrueAsCulled();
 		return true;
@@ -244,7 +271,6 @@ bool sdocSync(void * pSDOC, unsigned int id, void *param)
 		SOCPrivate *instance = (SOCPrivate*)pSDOC;
 		instance->socDestroy();
 		
-		util::OccluderQuad::OfflineTestClearBakeBuffer();
 		
 		return true;
 	}
@@ -445,10 +471,33 @@ bool sdocSync(void * pSDOC, unsigned int id, void *param)
 		return false;
 	}
 
-	
+#if defined(SDOC_NATIVE)
+	else if (id == SDOC_Get_BakeData_QuadTriangleNum) {
+		uint16_t* value = reinterpret_cast<uint16_t*>(param);
+		util::OccluderQuad::Get_BakeData_QuadTriangleNum(value);
+	}
+
+	else if (id == SDOC_Set_UseMaxDepthToQueryOccludeeMesh) {
+		uint16_t* bakeData = reinterpret_cast<uint16_t*>(param);
+		util::OccluderQuad::EnableMaxDepthToQueryOccludeeMesh(bakeData);
+	}
+#endif
+
 	else
 	{
 		return false;
 	}
 	return true;
+}
+
+VISIBLE_SYMBOL bool sdocQueryOccludees_OBB(void* pSDOC, const float* bbox, unsigned int nMesh, bool* results)
+{
+	SOCPrivate* instance = (SOCPrivate*)pSDOC;
+	if (instance == nullptr)
+	{
+		return false;
+	}
+
+	///////batchQuery would do input check
+	return instance->batchQuery(bbox, nMesh, results, true);
 }

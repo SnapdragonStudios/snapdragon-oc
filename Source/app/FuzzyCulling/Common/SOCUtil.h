@@ -188,6 +188,8 @@ namespace common
 	enum DumpImageMode
 	{
 		DumpFull = 0,
+		DumpFullMax = 1,
+		DumpFullMin = 2,
 #ifdef SDOC_NATIVE_DEBUG
 
 
@@ -214,6 +216,8 @@ namespace common
 		uint16_t SuperCompress = 0;
 
 		uint16_t EnableBackface = 0;
+		uint16_t IsOccludee = 0;
+		bool AABBMode = false;
 		const float *Vertices = nullptr;
 		const uint16_t *Indices = nullptr;
 	};
@@ -226,9 +230,10 @@ public:
 	void submitOccluder( const float *vertices, const unsigned short *indices,
             unsigned int nVert, unsigned int nIdx, 
             const float *localToWorld, bool backfaceCull);
+	bool queryOccludeeMesh(const float* vertices, const unsigned short* indices, unsigned int nVert, unsigned int nIdx, const float* localToWorld, bool backfaceCull);
 #endif
 
-	void recordOccludee(const float *vertices, unsigned int num);
+	void recordOccludee(const float *vertices, unsigned int num, bool obbQuery);
 
 
 	// width, height & near plane
@@ -267,8 +272,10 @@ public:
 	void StartRecordFrame(const float * CameraPos, const float * ViewDir, const float * ViewProj) ;
 
 
-	void RecordOccluder(const float * vertices, const unsigned short * indices, unsigned int nVert, unsigned int nIdx, const float * localToWorld, int backfaceCull);
+	void RecordOccluder(const float * vertices, const unsigned short * indices, unsigned int nVert, unsigned int nIdx, const float * localToWorld, int backfaceCull, std::string prefix);
 	FILE *mFileWriter = nullptr;
+
+	std::mutex mWriteMutex;
 };
 
 } // namespace common

@@ -42,7 +42,7 @@ public:
 
 
 	// batch query
-    bool batchQuery(const float *bbox, unsigned int nPrim, bool *results);
+    bool batchQuery(const float *bbox, unsigned int nPrim, bool *results, bool obbMode);
 
 	void configPerformanceMode(unsigned int configValue);
 	bool setConfig(unsigned int configTarget, unsigned int configValue);
