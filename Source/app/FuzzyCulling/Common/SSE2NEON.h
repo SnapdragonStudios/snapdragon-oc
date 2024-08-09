@@ -2038,7 +2038,7 @@ inline __m128i _mm_set_epi64x(__int64_t e1, __int64_t e0)
     //return vcombine_s64(vdup_n_s64(e0), vdup_n_s64(e1));
 }
 
-inline __m128 _mm_fmadd_ps(const __m128 &a, const __m128 &b, const __m128 &c)
+inline __m128 _mm_fmadd_ps_soc(const __m128 &a, const __m128 &b, const __m128 &c)
 {
 #ifdef __aarch64__
     return vfmaq_f32(c, a, b);
@@ -2047,7 +2047,7 @@ inline __m128 _mm_fmadd_ps(const __m128 &a, const __m128 &b, const __m128 &c)
 #endif
 }
 
-inline __m128 _mm_fnmadd_ps(const __m128 &a, const __m128 &b, const __m128 &c)
+inline __m128 _mm_fnmadd_ps_soc(const __m128 &a, const __m128 &b, const __m128 &c)
 {
 #ifdef __aarch64__
     // c - a * b
@@ -2057,7 +2057,7 @@ inline __m128 _mm_fnmadd_ps(const __m128 &a, const __m128 &b, const __m128 &c)
 #endif
 }
 
-inline __m128 _mm_fmsub_ps(const __m128 &a, const __m128 &b, const __m128 &c)
+inline __m128 _mm_fmsub_ps_soc(const __m128 &a, const __m128 &b, const __m128 &c)
 {
 #ifdef __aarch64__
     // a * b - c

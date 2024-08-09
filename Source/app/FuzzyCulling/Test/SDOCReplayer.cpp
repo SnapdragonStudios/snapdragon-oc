@@ -596,7 +596,7 @@ void ReplayFrame(SDOCLoader* dataProvider, int mode, int frameNum, int saveFrame
 			bool visible = false;
 			totalQueryNum++;
 			auto occ = frame->OccludeeMeshes[occIdx];
-			if (occ->CompactData == nullptr)
+			if ( occ->CompactData == nullptr)
 			{
 				{
 					if (occ->Indices == nullptr) {

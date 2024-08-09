@@ -24,10 +24,10 @@ The related optimizations include
 7. Set SDOCReplay project as start up project to test, compile and run
 8. For debug testing, set SDOC_DevelopMode to 1, set it as 0 when generating dynamic library libSDOC.quic.dll
 
-### Android
+### Android use Android Studio 2024
 
 Build the shared library
-1. Latest Android studio to open the `Source` folder to load the project
+1. Android Studio open the `Source` folder to load the project
 2. Sync Project with Gradle Files, then setup the key for building the releasing application. 
 3. Build->Generate Signed Bundle/APK, select **release** as the **Build Variants**.
 4. Unzip the APK for libSDOC.quic.so, the libSDOC.quic.so could be integrated with game engines.

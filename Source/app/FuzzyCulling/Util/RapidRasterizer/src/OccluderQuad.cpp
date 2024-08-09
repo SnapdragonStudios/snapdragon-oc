@@ -187,7 +187,7 @@ namespace util
 	{
 		__m128 a_yzx = _mm_shuffle_ps(a, a, _MM_SHUFFLE(3, 0, 2, 1));
 		__m128 b_yzx = _mm_shuffle_ps(b, b, _MM_SHUFFLE(3, 0, 2, 1));
-		__m128 c =  _mm_fmsub_ps(a, b_yzx, _mm_mul_ps(a_yzx, b));
+		__m128 c = _mm_fmsub_ps_soc(a, b_yzx, _mm_mul_ps(a_yzx, b));
 		return _mm_shuffle_ps(c, c, _MM_SHUFFLE(3, 0, 2, 1));
 	}
 
@@ -2478,7 +2478,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 			__m128 invExtents = _mm_and_ps(InvExtents, positive);
 			//temp set of rasterize required input
 			compressData[2] = _mm_castps_si128(invExtents);
-			compressData[3] = _mm_castps_si128(_mm_fmadd_ps(_mm_negate_ps_soc(invExtents), quadData.refMin, _mm_setr_ps(0, 0, 0, 1)));
+			compressData[3] = _mm_castps_si128(_mm_fmadd_ps_soc(_mm_negate_ps_soc(invExtents), quadData.refMin, _mm_setr_ps(0, 0, 0, 1)));
 			
 			__m128i* pVertices = compressData + 4; //already store bbox quad patch and tri patch & backface cull
 			int piIdx = 0;

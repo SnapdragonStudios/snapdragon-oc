@@ -105,7 +105,7 @@ namespace util
 	static constexpr bool bConvexOptimization = true;
 
 
-	static constexpr bool bDrawOccludeeToDepthMap = false;
+	static constexpr bool bDrawOccludeeToDepthMap = false; //Debug function, draw all primitives in occludee to depth map. Early exit would be disabled!!!
 	static constexpr bool bForceMeshLineDebug = false;
 	static constexpr float MeshLineScale = 1.0f;
 	
@@ -1590,17 +1590,17 @@ bool Rasterizer::queryVisibility_QUAD(const float* obb)
 
 	__m128* localToClip = this->m_OccludeelocalToClip;
 	corners[0] =
-		_mm_fmadd_ps(localToClip[0], _mm_set1_ps(obb[0]),
-			_mm_fmadd_ps(localToClip[1], _mm_set1_ps(obb[1]),
-				_mm_fmadd_ps(localToClip[2], _mm_set1_ps(obb[2]), localToClip[3])));
+		_mm_fmadd_ps_soc(localToClip[0], _mm_set1_ps(obb[0]),
+			_mm_fmadd_ps_soc(localToClip[1], _mm_set1_ps(obb[1]),
+				_mm_fmadd_ps_soc(localToClip[2], _mm_set1_ps(obb[2]), localToClip[3])));
 	corners[1] =
-		_mm_fmadd_ps(localToClip[0], _mm_set1_ps(obb[3]),
-			_mm_fmadd_ps(localToClip[1], _mm_set1_ps(obb[4]),
-				_mm_fmadd_ps(localToClip[2], _mm_set1_ps(obb[5]), localToClip[3])));
+		_mm_fmadd_ps_soc(localToClip[0], _mm_set1_ps(obb[3]),
+			_mm_fmadd_ps_soc(localToClip[1], _mm_set1_ps(obb[4]),
+				_mm_fmadd_ps_soc(localToClip[2], _mm_set1_ps(obb[5]), localToClip[3])));
 	corners[2] =
-		_mm_fmadd_ps(localToClip[0], _mm_set1_ps(obb[6]),
-			_mm_fmadd_ps(localToClip[1], _mm_set1_ps(obb[7]),
-				_mm_fmadd_ps(localToClip[2], _mm_set1_ps(obb[8]), localToClip[3])));
+		_mm_fmadd_ps_soc(localToClip[0], _mm_set1_ps(obb[6]),
+			_mm_fmadd_ps_soc(localToClip[1], _mm_set1_ps(obb[7]),
+				_mm_fmadd_ps_soc(localToClip[2], _mm_set1_ps(obb[8]), localToClip[3])));
 	corners[3] = _mm_add_ps(corners[1], _mm_sub_ps(corners[2], corners[0]));
 	
 
@@ -1737,22 +1737,22 @@ bool Rasterizer::queryVisibility_OBB(const float* obb)
 
 	__m128* localToClip = this->m_OccludeelocalToClip;
 	corners[0] =
-		_mm_fmadd_ps(localToClip[0], _mm_set1_ps(obb[0]),
-			_mm_fmadd_ps(localToClip[1], _mm_set1_ps(obb[1]),
-				_mm_fmadd_ps(localToClip[2], _mm_set1_ps(obb[2]), localToClip[3])));
+		_mm_fmadd_ps_soc(localToClip[0], _mm_set1_ps(obb[0]),
+			_mm_fmadd_ps_soc(localToClip[1], _mm_set1_ps(obb[1]),
+				_mm_fmadd_ps_soc(localToClip[2], _mm_set1_ps(obb[2]), localToClip[3])));
 	corners[1] =
-		_mm_fmadd_ps(localToClip[0], _mm_set1_ps(obb[3]),
-			_mm_fmadd_ps(localToClip[1], _mm_set1_ps(obb[4]),
-				_mm_fmadd_ps(localToClip[2], _mm_set1_ps(obb[5]), localToClip[3])));
+		_mm_fmadd_ps_soc(localToClip[0], _mm_set1_ps(obb[3]),
+			_mm_fmadd_ps_soc(localToClip[1], _mm_set1_ps(obb[4]),
+				_mm_fmadd_ps_soc(localToClip[2], _mm_set1_ps(obb[5]), localToClip[3])));
 	corners[2] =
-		_mm_fmadd_ps(localToClip[0], _mm_set1_ps(obb[6]),
-			_mm_fmadd_ps(localToClip[1], _mm_set1_ps(obb[7]),
-				_mm_fmadd_ps(localToClip[2], _mm_set1_ps(obb[8]), localToClip[3])));
+		_mm_fmadd_ps_soc(localToClip[0], _mm_set1_ps(obb[6]),
+			_mm_fmadd_ps_soc(localToClip[1], _mm_set1_ps(obb[7]),
+				_mm_fmadd_ps_soc(localToClip[2], _mm_set1_ps(obb[8]), localToClip[3])));
 	corners[3] = _mm_add_ps(corners[1], _mm_sub_ps(corners[2], corners[0]));
 	corners[4] =
-		_mm_fmadd_ps(localToClip[0], _mm_set1_ps(obb[9]),
-			_mm_fmadd_ps(localToClip[1], _mm_set1_ps(obb[10]),
-				_mm_fmadd_ps(localToClip[2], _mm_set1_ps(obb[11]), localToClip[3])));
+		_mm_fmadd_ps_soc(localToClip[0], _mm_set1_ps(obb[9]),
+			_mm_fmadd_ps_soc(localToClip[1], _mm_set1_ps(obb[10]),
+				_mm_fmadd_ps_soc(localToClip[2], _mm_set1_ps(obb[11]), localToClip[3])));
 
 	__m128 edge40 = _mm_sub_ps(corners[4], corners[0]);
 	corners[5] = _mm_add_ps(corners[1], edge40);
@@ -1912,9 +1912,9 @@ void Rasterizer::prepareOccludeeRasterization(const float* data, OccluderRenderC
 	__m128 egde1 = _mm_mul_ps(localToClip[1], _mm_set1_ps(minExtents[4]));
 	__m128 egde2 = _mm_mul_ps(localToClip[2], _mm_set1_ps(minExtents[5]));
 	__m128 corners4 =
-		_mm_fmadd_ps(localToClip[0], _mm_set1_ps(minExtents[0]),
-			_mm_fmadd_ps(localToClip[1], _mm_set1_ps(minExtents[1]),
-				_mm_fmadd_ps(localToClip[2], _mm_set1_ps(minExtents[2]), localToClip[3])));
+		_mm_fmadd_ps_soc(localToClip[0], _mm_set1_ps(minExtents[0]),
+			_mm_fmadd_ps_soc(localToClip[1], _mm_set1_ps(minExtents[1]),
+				_mm_fmadd_ps_soc(localToClip[2], _mm_set1_ps(minExtents[2]), localToClip[3])));
 	occ->mat[3] = corners4; // as clipped occludee might need to go through rasterize path
 
 	float w4 = ((float*)&corners4)[3];
@@ -2023,9 +2023,9 @@ bool Rasterizer::queryVisibility(const float* minmaxf, OccluderRenderCache* occ)
 // 
 	// Transform first corner
 	corners[4] =
-		_mm_fmadd_ps(localToClip[0], _mm_set1_ps(minmaxf[0]),
-			_mm_fmadd_ps(localToClip[1], _mm_set1_ps(minmaxf[1]),
-				_mm_fmadd_ps(localToClip[2], _mm_set1_ps(minmaxf[2]), localToClip[3])));
+		_mm_fmadd_ps_soc(localToClip[0], _mm_set1_ps(minmaxf[0]),
+			_mm_fmadd_ps_soc(localToClip[1], _mm_set1_ps(minmaxf[1]),
+				_mm_fmadd_ps_soc(localToClip[2], _mm_set1_ps(minmaxf[2]), localToClip[3])));
 
 	if (bQueryOccluder)
 	{
@@ -3865,10 +3865,10 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 	__m128 z[4];
 	__m128 c0 = occluderCache->c0;
 	__m128 c1 = occluderCache->c1;
-	z[0] = _mm_fmadd_ps(invW[0], c1, c0);
-	z[1] = _mm_fmadd_ps(invW[1], c1, c0);
-	z[2] = _mm_fmadd_ps(invW[2], c1, c0);
-	z[3] = _mm_fmadd_ps(invW[3], c1, c0);
+	z[0] = _mm_fmadd_ps_soc(invW[0], c1, c0);
+	z[1] = _mm_fmadd_ps_soc(invW[1], c1, c0);
+	z[2] = _mm_fmadd_ps_soc(invW[2], c1, c0);
+	z[3] = _mm_fmadd_ps_soc(invW[3], c1, c0);
 
 	__m128 maxZ = _mm_max_ps(_mm_max_ps(z[0], z[1]), _mm_max_ps(z[2], z[3]));
 
@@ -4055,16 +4055,16 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 	__m128 edgeNormalsY4 = _mm_sub_ps(x[2], x[0]);
 
 	if (bDrawOccludee) {
-		auto a1 = _mm_mul_ps(areas[0], _mm_fmsub_ps(z20, edgeNormalsX[1], _mm_mul_ps(z12, edgeNormalsX4)));
-		auto a2 = _mm_mul_ps(areas[0], _mm_fmsub_ps(z20, edgeNormalsY[1], _mm_mul_ps(z12, edgeNormalsY4)));
-		auto d1 = _mm_mul_ps(areas[1], _mm_fnmadd_ps(z20, edgeNormalsX[3], _mm_mul_ps(z30, edgeNormalsX4)));
-		auto d2 = _mm_mul_ps(areas[1], _mm_fnmadd_ps(z20, edgeNormalsY[3], _mm_mul_ps(z30, edgeNormalsY4)));
+		auto a1 = _mm_mul_ps(areas[0], _mm_fmsub_ps_soc(z20, edgeNormalsX[1], _mm_mul_ps(z12, edgeNormalsX4)));
+		auto a2 = _mm_mul_ps(areas[0], _mm_fmsub_ps_soc(z20, edgeNormalsY[1], _mm_mul_ps(z12, edgeNormalsY4)));
+		auto d1 = _mm_mul_ps(areas[1], _mm_fnmadd_ps_soc(z20, edgeNormalsX[3], _mm_mul_ps(z30, edgeNormalsX4)));
+		auto d2 = _mm_mul_ps(areas[1], _mm_fnmadd_ps_soc(z20, edgeNormalsY[3], _mm_mul_ps(z30, edgeNormalsY4)));
 
 
-		auto a = _mm_sub_ps(z[0], _mm_fmadd_ps(x[0], a1, _mm_mul_ps(y[0], a2)));
-		auto b = _mm_sub_ps(z[1], _mm_fmadd_ps(x[1], a1, _mm_mul_ps(y[1], a2)));
-		auto c = _mm_sub_ps(z[2], _mm_fmadd_ps(x[2], d1, _mm_mul_ps(y[2], d2)));
-		auto d = _mm_sub_ps(z[3], _mm_fmadd_ps(x[3], d1, _mm_mul_ps(y[3], d2)));
+		auto a = _mm_sub_ps(z[0], _mm_fmadd_ps_soc(x[0], a1, _mm_mul_ps(y[0], a2)));
+		auto b = _mm_sub_ps(z[1], _mm_fmadd_ps_soc(x[1], a1, _mm_mul_ps(y[1], a2)));
+		auto c = _mm_sub_ps(z[2], _mm_fmadd_ps_soc(x[2], d1, _mm_mul_ps(y[2], d2)));
+		auto d = _mm_sub_ps(z[3], _mm_fmadd_ps_soc(x[3], d1, _mm_mul_ps(y[3], d2)));
 
 		depthPlane[0] = _mm_max_ps(_mm_max_ps(a, b), _mm_max_ps(c, d));
 
@@ -4076,13 +4076,13 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 		// Depth delta X/Y - select the derivatives from the triangle with the greater area, which is numerically more stable
 		depthPlane[1] = _mm_mul_ps(invArea,
 			_mm_blendv_ps(
-				_mm_fmsub_ps(z20, edgeNormalsX[1], _mm_mul_ps(z12, edgeNormalsX4)),
-				_mm_fnmadd_ps(z20, edgeNormalsX[3], _mm_mul_ps(z30, edgeNormalsX4)),
+				_mm_fmsub_ps_soc(z20, edgeNormalsX[1], _mm_mul_ps(z12, edgeNormalsX4)),
+				_mm_fnmadd_ps_soc(z20, edgeNormalsX[3], _mm_mul_ps(z30, edgeNormalsX4)),
 				greaterArea));
 		depthPlane[2] = _mm_mul_ps(invArea,
 			_mm_blendv_ps(
-				_mm_fmsub_ps(z20, edgeNormalsY[1], _mm_mul_ps(z12, edgeNormalsY4)),
-				_mm_fnmadd_ps(z20, edgeNormalsY[3], _mm_mul_ps(z30, edgeNormalsY4)),
+				_mm_fmsub_ps_soc(z20, edgeNormalsY[1], _mm_mul_ps(z12, edgeNormalsY4)),
+				_mm_fnmadd_ps_soc(z20, edgeNormalsY[3], _mm_mul_ps(z30, edgeNormalsY4)),
 				greaterArea));
 
 
@@ -4092,7 +4092,7 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 		// Depth at center of first pixel
 		__m128 refX = _mm_sub_ps(_mm_set1_ps(1.0f / 16.0f), x[0]);
 		__m128 refY = _mm_sub_ps(_mm_set1_ps(1.0f / 16.0f), y[0]);
-		depthPlane[0] = _mm_fmadd_ps(refX, depthPlane[1], _mm_fmadd_ps(refY, depthPlane[2], z[0]));
+		depthPlane[0] = _mm_fmadd_ps_soc(refX, depthPlane[1], _mm_fmadd_ps_soc(refY, depthPlane[2], z[0]));
 	}
 
 
@@ -4166,13 +4166,13 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 		__m128 depthLeftBase;
 		if (VRS_X4Y4_Optimzation)
 		{
-			depthLeftBase = _mm_fmadd_ps(depthDx, xFactors[xIncrease], _mm_set1_ps(depthPlaneData[0]));
+			depthLeftBase = _mm_fmadd_ps_soc(depthDx, xFactors[xIncrease], _mm_set1_ps(depthPlaneData[0]));
 			float halfSlope = slope * 0.5f;
 			depthLeftBase = _mm_add_ps(depthLeftBase, _mm_setr_ps(0, 0, halfSlope, halfSlope));
 		}
 		else
 		{
-			depthLeftBase = _mm_fmadd_ps(depthDx, _mm_setr_ps(0.0f, 0.125f, 0.25f, 0.375f), _mm_set1_ps(depthPlaneData[0]));
+			depthLeftBase = _mm_fmadd_ps_soc(depthDx, _mm_setr_ps(0.0f, 0.125f, 0.25f, 0.375f), _mm_set1_ps(depthPlaneData[0]));
 		}
 
 
@@ -4195,9 +4195,9 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 
 		//delay calculation of edgeNormalsX edgeNormalsY
 		//_mm_add_ps(edgeNormalsX[primitiveIdx], edgeNormalsY[primitiveIdx]), _mm_set1_ps(0.5f) is the central point of 8x8 block
-		__m128 edgeOffset = _mm_fmadd_ps(_mm_add_ps(edgeNormalsXP, edgeNormalsYP), _mm_set1_ps(0.5f), edgeOffsetsP);
+		__m128 edgeOffset = _mm_fmadd_ps_soc(_mm_add_ps(edgeNormalsXP, edgeNormalsYP), _mm_set1_ps(0.5f), edgeOffsetsP);
 		__m128 edge_mul = _mm_set1_ps(OFFSET_mul);
-		edgeOffset = _mm_fmadd_ps(edgeOffset, edge_mul, _mm_set1_ps(OFFSET_add));
+		edgeOffset = _mm_fmadd_ps_soc(edgeOffset, edge_mul, _mm_set1_ps(OFFSET_add));
 
 		__m128 edgeNormalX = _mm_mul_ps(edgeNormalsXP, edge_mul);
 		__m128 edgeNormalY = _mm_mul_ps(edgeNormalsYP, edge_mul);
@@ -4224,14 +4224,14 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 
 		uint32_t blockY = blockMinY;
 		uint32_t anythingDraw = 0;
-		__m128 edgeOffsetMin = _mm_fmadd_ps(edgeNormalX, _mm_set1_ps(float(blockMinX)), edgeOffset);
+		__m128 edgeOffsetMin = _mm_fmadd_ps_soc(edgeNormalX, _mm_set1_ps(float(blockMinX)), edgeOffset);
 		while(true)
 		{
 
 			__m128 blockYf = _mm_set1_ps(float(blockY));
-			__m128 rowDepthLeftBtm = _mm_fmadd_ps(depthBlockDelta, blockYf, rowDepthLeftBtmOffset);
+			__m128 rowDepthLeftBtm = _mm_fmadd_ps_soc(depthBlockDelta, blockYf, rowDepthLeftBtmOffset);
 
-			__m128 offset = _mm_fmadd_ps(edgeNormalY, blockYf, edgeOffsetMin);
+			__m128 offset = _mm_fmadd_ps_soc(edgeNormalY, blockYf, edgeOffsetMin);
 
 			
 			uint32_t blockRowOffset = 0;
@@ -4294,7 +4294,7 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 				//drawQuad routine
 				if (VRS_X4Y4_Optimzation)
 				{
-					__m128i rowDepthLeft = _mm_castps_si128(_mm_fmadd_ps(depthDx, _mm_set1_ps((float)blockX), rowDepthLeftBtm));
+					__m128i rowDepthLeft = _mm_castps_si128(_mm_fmadd_ps_soc(depthDx, _mm_set1_ps((float)blockX), rowDepthLeftBtm));
 
 					rowDepthLeft = _mm_max_epi32(rowDepthLeft, _mm_set1_epi32(primitiveMinZf));
 					rowDepthLeft = _mm_min_epi32(rowDepthLeft, _mm_set1_epi32(primitiveMaxZf));
@@ -4493,8 +4493,8 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 				else {
 #if defined( SUPPORT_ALL_FEATURE)
 					__m128 depthDxHalf = _mm_set1_ps(depthPlaneData[4] * 0.5f);
-					__m128 lineDepthLeft = _mm_fmadd_ps(depthBlockDelta, _mm_set1_ps(float(blockY)), depthLeftBase);
-					__m128 rowDepthLeft = _mm_fmadd_ps(depthDx, _mm_set1_ps((float)blockX), lineDepthLeft);
+					__m128 lineDepthLeft = _mm_fmadd_ps_soc(depthBlockDelta, _mm_set1_ps(float(blockY)), depthLeftBase);
+					__m128 rowDepthLeft = _mm_fmadd_ps_soc(depthDx, _mm_set1_ps((float)blockX), lineDepthLeft);
 					__m128 rowDepthRight = _mm_add_ps(depthDxHalf, rowDepthLeft);
 
 					if (blockMask != -1 && bPixelAABBClippingQuad)
@@ -4575,7 +4575,7 @@ void Rasterizer::rasterize(common::OccluderMesh& raw, OccluderRenderCache* occlu
 		__m128 zero_mask = _mm_cmpneq_ps(Wa, Wb);
 		c0 = _mm_and_ps(c0, zero_mask);
 
-		occluderCache->c1 = _mm_fnmadd_ps(c0, Wa, Za);
+		occluderCache->c1 = _mm_fnmadd_ps_soc(c0, Wa, Za);
 		occluderCache->c0 = c0;
 
 
@@ -4613,7 +4613,7 @@ void Rasterizer::rasterize(common::OccluderMesh& raw, OccluderRenderCache* occlu
 			__m128 zero_mask = _mm_cmpneq_ps(Wa_b, _mm_setzero_ps());
 			c0 = _mm_and_ps(c0, zero_mask);
 
-			occluderCache->c1 = _mm_fnmadd_ps(c0, Wa, Za);
+			occluderCache->c1 = _mm_fnmadd_ps_soc(c0, Wa, Za);
 			occluderCache->c0 = c0;
 		}
 
@@ -4694,24 +4694,24 @@ void Rasterizer::rasterize(common::OccluderMesh& raw, OccluderRenderCache* occlu
 				if (raw.AABBMode) {
 					__m128 extend = _mm_set1_ps(pCompressVertices[3]);
 					__m128 min = _mm_set1_ps(pCompressVertices[0]);
-					dataArray[0] = _mm_fmadd_ps(paabbArray[0], extend, min);
-					dataArray[1] = _mm_fmadd_ps(paabbArray[1], extend, min);
+					dataArray[0] = _mm_fmadd_ps_soc(paabbArray[0], extend, min);
+					dataArray[1] = _mm_fmadd_ps_soc(paabbArray[1], extend, min);
 					dataArray[2] = dataArray[1];// _mm_fmadd_ps(paabbArray[2], extend, min);
-					dataArray[3] = _mm_fmadd_ps(paabbArray[2], extend, min);
+					dataArray[3] = _mm_fmadd_ps_soc(paabbArray[2], extend, min);
 
 
 					extend = _mm_set1_ps(pCompressVertices[4]);
 					min = _mm_set1_ps(pCompressVertices[1]);
-					dataArray[4] = _mm_fmadd_ps(paabbArray[3], extend, min);
-					dataArray[5] = _mm_fmadd_ps(paabbArray[4], extend, min);
-					dataArray[6] = _mm_fmadd_ps(paabbArray[5], extend, min);
-					dataArray[7] = _mm_fmadd_ps(paabbArray[6], extend, min);
+					dataArray[4] = _mm_fmadd_ps_soc(paabbArray[3], extend, min);
+					dataArray[5] = _mm_fmadd_ps_soc(paabbArray[4], extend, min);
+					dataArray[6] = _mm_fmadd_ps_soc(paabbArray[5], extend, min);
+					dataArray[7] = _mm_fmadd_ps_soc(paabbArray[6], extend, min);
 
 					extend = _mm_set1_ps(pCompressVertices[5]);
 					min = _mm_set1_ps(pCompressVertices[2]);
-					dataArray[8] = _mm_fmadd_ps(paabbArray[7], extend, min);
+					dataArray[8] = _mm_fmadd_ps_soc(paabbArray[7], extend, min);
 					dataArray[9] = dataArray[8];// _mm_fmadd_ps(paabbArray[9], extend, min);
-					dataArray[10] = _mm_fmadd_ps(paabbArray[8], extend, min);
+					dataArray[10] = _mm_fmadd_ps_soc(paabbArray[8], extend, min);
 					dataArray[11] = dataArray[10];// _mm_fmadd_ps(paabbArray[11], extend, min);
 					paabbArray += 8;
 
@@ -4838,10 +4838,10 @@ void Rasterizer::rasterize(common::OccluderMesh& raw, OccluderRenderCache* occlu
 			__m128 mat32 = _mm_set1_ps(matF[14]);//_mm_shuffle_ps_single_index(occluderCache->mat[3], 2);
 
 			__m128 W[4];
-			W[faceIdx0] = _mm_fmadd_ps(dataArray[0], mat30, _mm_fmadd_ps(dataArray[4], mat31, _mm_fmadd_ps(dataArray[8], mat32, mat33)));
-			W[1] = _mm_fmadd_ps(dataArray[1], mat30, _mm_fmadd_ps(dataArray[5], mat31, _mm_fmadd_ps(dataArray[9], mat32, mat33)));
-			W[faceIdx2] = _mm_fmadd_ps(dataArray[2], mat30, _mm_fmadd_ps(dataArray[6], mat31, _mm_fmadd_ps(dataArray[10], mat32, mat33)));
-			W[3] = _mm_fmadd_ps(dataArray[3], mat30, _mm_fmadd_ps(dataArray[7], mat31, _mm_fmadd_ps(dataArray[11], mat32, mat33)));
+			W[faceIdx0] = _mm_fmadd_ps_soc(dataArray[0], mat30, _mm_fmadd_ps_soc(dataArray[4], mat31, _mm_fmadd_ps_soc(dataArray[8], mat32, mat33)));
+			W[1] = _mm_fmadd_ps_soc(dataArray[1], mat30, _mm_fmadd_ps_soc(dataArray[5], mat31, _mm_fmadd_ps_soc(dataArray[9], mat32, mat33)));
+			W[faceIdx2] = _mm_fmadd_ps_soc(dataArray[2], mat30, _mm_fmadd_ps_soc(dataArray[6], mat31, _mm_fmadd_ps_soc(dataArray[10], mat32, mat33)));
+			W[3] = _mm_fmadd_ps_soc(dataArray[3], mat30, _mm_fmadd_ps_soc(dataArray[7], mat31, _mm_fmadd_ps_soc(dataArray[11], mat32, mat33)));
 
 			__m128 primitiveValid = _mm_set1_ps(-0.0f);
 			if (possiblyNearClipped)
@@ -4882,18 +4882,18 @@ void Rasterizer::rasterize(common::OccluderMesh& raw, OccluderRenderCache* occlu
 			__m128 mat00 = _mm_set1_ps(matF[0]); //_mm_shuffle_ps_single_index(occluderCache->mat[0], 0);
 			__m128 mat01 = _mm_set1_ps(matF[1]); //_mm_shuffle_ps_single_index(occluderCache->mat[0], 1);
 			__m128 mat02 = _mm_set1_ps(matF[2]); //_mm_shuffle_ps_single_index(occluderCache->mat[0], 2);
-			X[faceIdx0] = _mm_fmadd_ps(dataArray[0], mat00, _mm_fmadd_ps(dataArray[4], mat01, _mm_fmadd_ps(dataArray[8], mat02, mat03)));
-			X[1] = _mm_fmadd_ps(dataArray[1], mat00, _mm_fmadd_ps(dataArray[5], mat01, _mm_fmadd_ps(dataArray[9], mat02, mat03)));
-			X[faceIdx2] = _mm_fmadd_ps(dataArray[2], mat00, _mm_fmadd_ps(dataArray[6], mat01, _mm_fmadd_ps(dataArray[10], mat02, mat03)));
-			X[3] = _mm_fmadd_ps(dataArray[3], mat00, _mm_fmadd_ps(dataArray[7], mat01, _mm_fmadd_ps(dataArray[11], mat02, mat03)));
+			X[faceIdx0] = _mm_fmadd_ps_soc(dataArray[0], mat00, _mm_fmadd_ps_soc(dataArray[4], mat01, _mm_fmadd_ps_soc(dataArray[8], mat02, mat03)));
+			X[1] = _mm_fmadd_ps_soc(dataArray[1], mat00, _mm_fmadd_ps_soc(dataArray[5], mat01, _mm_fmadd_ps_soc(dataArray[9], mat02, mat03)));
+			X[faceIdx2] = _mm_fmadd_ps_soc(dataArray[2], mat00, _mm_fmadd_ps_soc(dataArray[6], mat01, _mm_fmadd_ps_soc(dataArray[10], mat02, mat03)));
+			X[3] = _mm_fmadd_ps_soc(dataArray[3], mat00, _mm_fmadd_ps_soc(dataArray[7], mat01, _mm_fmadd_ps_soc(dataArray[11], mat02, mat03)));
 
 			__m128 mat10 = _mm_set1_ps(matF[4]); //_mm_shuffle_ps_single_index(occluderCache->mat[1], 0);
 			__m128 mat11 = _mm_set1_ps(matF[5]); //_mm_shuffle_ps_single_index(occluderCache->mat[1], 1);
 			__m128 mat12 = _mm_set1_ps(matF[6]); //_mm_shuffle_ps_single_index(occluderCache->mat[1], 2);
-			Y[faceIdx0] = _mm_fmadd_ps(dataArray[0], mat10, _mm_fmadd_ps(dataArray[4], mat11, _mm_fmadd_ps(dataArray[8], mat12, mat13)));
-			Y[1] = _mm_fmadd_ps(dataArray[1], mat10, _mm_fmadd_ps(dataArray[5], mat11, _mm_fmadd_ps(dataArray[9], mat12, mat13)));
-			Y[faceIdx2] = _mm_fmadd_ps(dataArray[2], mat10, _mm_fmadd_ps(dataArray[6], mat11, _mm_fmadd_ps(dataArray[10], mat12, mat13)));
-			Y[3] = _mm_fmadd_ps(dataArray[3], mat10, _mm_fmadd_ps(dataArray[7], mat11, _mm_fmadd_ps(dataArray[11], mat12, mat13)));
+			Y[faceIdx0] = _mm_fmadd_ps_soc(dataArray[0], mat10, _mm_fmadd_ps_soc(dataArray[4], mat11, _mm_fmadd_ps_soc(dataArray[8], mat12, mat13)));
+			Y[1] = _mm_fmadd_ps_soc(dataArray[1], mat10, _mm_fmadd_ps_soc(dataArray[5], mat11, _mm_fmadd_ps_soc(dataArray[9], mat12, mat13)));
+			Y[faceIdx2] = _mm_fmadd_ps_soc(dataArray[2], mat10, _mm_fmadd_ps_soc(dataArray[6], mat11, _mm_fmadd_ps_soc(dataArray[10], mat12, mat13)));
+			Y[3] = _mm_fmadd_ps_soc(dataArray[3], mat10, _mm_fmadd_ps_soc(dataArray[7], mat11, _mm_fmadd_ps_soc(dataArray[11], mat12, mat13)));
 
 
 
@@ -4941,7 +4941,7 @@ void Rasterizer::rasterize(common::OccluderMesh& raw, OccluderRenderCache* occlu
 			{
 				int validMask = _mm_movemask_ps(primitiveValid);
 				SplitToTwoTriangles<true, bBackFaceCulling && !bDrawOccludee, bDrawOccludee>(X, Y, W, invW, primitiveValid, validMask, occluderCache);
-				if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+				if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible && !bDrawOccludeeToDepthMap)
 					return;
 				continue;
 			}
@@ -4969,8 +4969,8 @@ void Rasterizer::rasterize(common::OccluderMesh& raw, OccluderRenderCache* occlu
 
 
 			__m128 areas[2];
-			areas[0] = _mm_fmsub_ps(edgeNormalsX[0], edgeNormalsY[1], _mm_mul_ps(edgeNormalsX[1], edgeNormalsY[0]));
-			areas[1] = _mm_fmsub_ps(edgeNormalsX[2], edgeNormalsY[3], _mm_mul_ps(edgeNormalsX[3], edgeNormalsY[2]));
+			areas[0] = _mm_fmsub_ps_soc(edgeNormalsX[0], edgeNormalsY[1], _mm_mul_ps(edgeNormalsX[1], edgeNormalsY[0]));
+			areas[1] = _mm_fmsub_ps_soc(edgeNormalsX[2], edgeNormalsY[3], _mm_mul_ps(edgeNormalsX[3], edgeNormalsY[2]));
 
 			__m128 minArea = _mm_min_ps(areas[0], areas[1]);
 			{
@@ -4992,7 +4992,7 @@ void Rasterizer::rasterize(common::OccluderMesh& raw, OccluderRenderCache* occlu
 						continue;
 					}
 					SplitToTwoTriangles<false, bBackFaceCulling, bDrawOccludee>(X, Y, W, invW, primitiveValid, validMask, occluderCache);
-					if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+					if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible && !bDrawOccludeeToDepthMap)
 						return;
 					continue;
 				}
@@ -5021,7 +5021,7 @@ void Rasterizer::rasterize(common::OccluderMesh& raw, OccluderRenderCache* occlu
 					{
 						//check concave scenario: if any triangle of four triangles formed by the four points has negative area
 						//the convex property is violated. going for safe way, Triangle Approach
-						__m128 area3 = _mm_fmsub_ps(edgeNormalsX[1], edgeNormalsY[2], _mm_mul_ps(edgeNormalsX[2], edgeNormalsY[1]));
+						__m128 area3 = _mm_fmsub_ps_soc(edgeNormalsX[1], edgeNormalsY[2], _mm_mul_ps(edgeNormalsX[2], edgeNormalsY[1]));
 						__m128 area4 = _mm_sub_ps(_mm_add_ps(areas[0], areas[1]), area3);
 
 						//DC3 degenerate case 3: for the case of any of area1/area2 is zero,
@@ -5034,7 +5034,7 @@ void Rasterizer::rasterize(common::OccluderMesh& raw, OccluderRenderCache* occlu
 						if (_mm_same_sign0(concaveQuad) == false)  //at least one active primitive is concave
 						{
 							SplitToTwoTriangles<false, bBackFaceCulling, bDrawOccludee>(X, Y, W, invW, primitiveValid, validMask, occluderCache);
-							if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+							if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible && !bDrawOccludeeToDepthMap)
 								return;
 							continue;
 						}
@@ -5043,7 +5043,7 @@ void Rasterizer::rasterize(common::OccluderMesh& raw, OccluderRenderCache* occlu
 				else
 				{
 					//even in backface cull off state, if any area is negative, go triangle approach
-					__m128 area3 = _mm_fmsub_ps(edgeNormalsX[1], edgeNormalsY[2], _mm_mul_ps(edgeNormalsX[2], edgeNormalsY[1]));
+					__m128 area3 = _mm_fmsub_ps_soc(edgeNormalsX[1], edgeNormalsY[2], _mm_mul_ps(edgeNormalsX[2], edgeNormalsY[1]));
 					__m128 area4 = _mm_sub_ps(_mm_add_ps(areas[0], areas[1]), area3);
 
 					__m128 minArea4 = _mm_min_ps(_mm_min_ps(area4, area3), minArea);
@@ -5056,7 +5056,7 @@ void Rasterizer::rasterize(common::OccluderMesh& raw, OccluderRenderCache* occlu
 					{
 						int validMask = _mm_movemask_ps(primitiveValid);
 						SplitToTwoTriangles<false, bBackFaceCulling, bDrawOccludee>(X, Y, W, invW, primitiveValid, validMask, occluderCache);
-						if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+						if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible && !bDrawOccludeeToDepthMap)
 							return;
 						continue;
 					}
@@ -5074,7 +5074,7 @@ void Rasterizer::rasterize(common::OccluderMesh& raw, OccluderRenderCache* occlu
 			drawQuad<true, bDrawOccludee>(X, Y, invW, W, primitiveValid, edgeNormalsX, edgeNormalsY, areas, occluderCache);
 			
 			if (bDrawOccludee) {
-				if (occluderCache->mRasterizedOccludeeVisible) {
+				if (occluderCache->mRasterizedOccludeeVisible && !bDrawOccludeeToDepthMap) {
 					return;
 				}
 			}
@@ -5246,9 +5246,9 @@ void Rasterizer::rasterize(common::OccluderMesh& raw, OccluderRenderCache* occlu
 				__m128 mat32 = _mm_set1_ps(matF[14]);// _mm_shuffle_ps_single_index(occluderCache->mat[3], 2);
 
 				__m128 W[3];
-				W[faceIdx0] = _mm_fmadd_ps(dataArray[0], mat30, _mm_fmadd_ps(dataArray[3], mat31, _mm_fmadd_ps(dataArray[6], mat32, mat33)));
-				W[1] = _mm_fmadd_ps(dataArray[2], mat30, _mm_fmadd_ps(dataArray[5], mat31, _mm_fmadd_ps(dataArray[8], mat32, mat33)));
-				W[faceIdx2] = _mm_fmadd_ps(dataArray[1], mat30, _mm_fmadd_ps(dataArray[4], mat31, _mm_fmadd_ps(dataArray[7], mat32, mat33)));
+				W[faceIdx0] = _mm_fmadd_ps_soc(dataArray[0], mat30, _mm_fmadd_ps_soc(dataArray[3], mat31, _mm_fmadd_ps_soc(dataArray[6], mat32, mat33)));
+				W[1] = _mm_fmadd_ps_soc(dataArray[2], mat30, _mm_fmadd_ps_soc(dataArray[5], mat31, _mm_fmadd_ps_soc(dataArray[8], mat32, mat33)));
+				W[faceIdx2] = _mm_fmadd_ps_soc(dataArray[1], mat30, _mm_fmadd_ps_soc(dataArray[4], mat31, _mm_fmadd_ps_soc(dataArray[7], mat32, mat33)));
 
 
 				if (DebugOccluderOccludee)
@@ -5296,17 +5296,17 @@ void Rasterizer::rasterize(common::OccluderMesh& raw, OccluderRenderCache* occlu
 				__m128 mat00 = _mm_set1_ps(matF[0]);// _mm_shuffle_ps_single_index(occluderCache->mat[0], 0);
 				__m128 mat01 = _mm_set1_ps(matF[1]);//_mm_shuffle_ps_single_index(occluderCache->mat[0], 1);
 				__m128 mat02 = _mm_set1_ps(matF[2]);//_mm_shuffle_ps_single_index(occluderCache->mat[0], 2);
-				X[faceIdx0] = _mm_fmadd_ps(dataArray[0], mat00, _mm_fmadd_ps(dataArray[3], mat01, _mm_fmadd_ps(dataArray[6], mat02, mat03)));
-				X[1] = _mm_fmadd_ps(dataArray[2], mat00, _mm_fmadd_ps(dataArray[5], mat01, _mm_fmadd_ps(dataArray[8], mat02, mat03)));
-				X[faceIdx2] = _mm_fmadd_ps(dataArray[1], mat00, _mm_fmadd_ps(dataArray[4], mat01, _mm_fmadd_ps(dataArray[7], mat02, mat03)));
+				X[faceIdx0] = _mm_fmadd_ps_soc(dataArray[0], mat00, _mm_fmadd_ps_soc(dataArray[3], mat01, _mm_fmadd_ps_soc(dataArray[6], mat02, mat03)));
+				X[1] = _mm_fmadd_ps_soc(dataArray[2], mat00, _mm_fmadd_ps_soc(dataArray[5], mat01, _mm_fmadd_ps_soc(dataArray[8], mat02, mat03)));
+				X[faceIdx2] = _mm_fmadd_ps_soc(dataArray[1], mat00, _mm_fmadd_ps_soc(dataArray[4], mat01, _mm_fmadd_ps_soc(dataArray[7], mat02, mat03)));
 
 
 				__m128 mat10 = _mm_set1_ps(matF[4]);//_mm_shuffle_ps_single_index(occluderCache->mat[1], 0);
 				__m128 mat11 = _mm_set1_ps(matF[5]);//_mm_shuffle_ps_single_index(occluderCache->mat[1], 1);
 				__m128 mat12 = _mm_set1_ps(matF[6]);//_mm_shuffle_ps_single_index(occluderCache->mat[1], 2);
-				Y[faceIdx0] = _mm_fmadd_ps(dataArray[0], mat10, _mm_fmadd_ps(dataArray[3], mat11, _mm_fmadd_ps(dataArray[6], mat12, mat13)));
-				Y[1] = _mm_fmadd_ps(dataArray[2], mat10, _mm_fmadd_ps(dataArray[5], mat11, _mm_fmadd_ps(dataArray[8], mat12, mat13)));
-				Y[faceIdx2] = _mm_fmadd_ps(dataArray[1], mat10, _mm_fmadd_ps(dataArray[4], mat11, _mm_fmadd_ps(dataArray[7], mat12, mat13)));
+				Y[faceIdx0] = _mm_fmadd_ps_soc(dataArray[0], mat10, _mm_fmadd_ps_soc(dataArray[3], mat11, _mm_fmadd_ps_soc(dataArray[6], mat12, mat13)));
+				Y[1] = _mm_fmadd_ps_soc(dataArray[2], mat10, _mm_fmadd_ps_soc(dataArray[5], mat11, _mm_fmadd_ps_soc(dataArray[8], mat12, mat13)));
+				Y[faceIdx2] = _mm_fmadd_ps_soc(dataArray[1], mat10, _mm_fmadd_ps_soc(dataArray[4], mat11, _mm_fmadd_ps_soc(dataArray[7], mat12, mat13)));
 
 
 
@@ -5375,7 +5375,7 @@ void Rasterizer::rasterize(common::OccluderMesh& raw, OccluderRenderCache* occlu
 					drawTriangle< false, bBackFaceCulling, bDrawOccludee>(X, Y, invW, W, primitiveValid, occluderCache);
 				}
 				if (bDrawOccludee) {
-					if (occluderCache->mRasterizedOccludeeVisible) {
+					if (occluderCache->mRasterizedOccludeeVisible && !bDrawOccludeeToDepthMap) {
 						return ;
 					}
 				}
@@ -5870,7 +5870,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 
 
 	// Area and backface culling
-	__m128 negativeArea = _mm_fmsub_ps(edgeNormalsX[1], edgeNormalsY[0], _mm_mul_ps(edgeNormalsX[0], edgeNormalsY[1])); //negative negativeArea
+	__m128 negativeArea = _mm_fmsub_ps_soc(edgeNormalsX[1], edgeNormalsY[0], _mm_mul_ps(edgeNormalsX[0], edgeNormalsY[1])); //negative negativeArea
 
 
 
@@ -6102,7 +6102,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 
 
 	// Compute Z from linear relation with 1/W
-	__m128 maxZ = _mm_fmadd_ps(_mm_max_ps(_mm_max_ps(invW[0], invW[1]), invW[2]), occluderCache->c1, occluderCache->c0);
+	__m128 maxZ = _mm_fmadd_ps_soc(_mm_max_ps(_mm_max_ps(invW[0], invW[1]), invW[2]), occluderCache->c1, occluderCache->c0);
 	// If any W < 0, assume maxZ = 1 (effectively disabling Hi-Z)
 	if (possiblyNearClipped)
 	{
@@ -6126,7 +6126,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 	{
 		__m128 minZ;
 		if (occluderCache->SuperFlatOccludee == false) {
-			minZ = _mm_fmadd_ps(_mm_min_ps(_mm_min_ps(invW[0], invW[1]), invW[2]), occluderCache->c1, occluderCache->c0);
+			minZ = _mm_fmadd_ps_soc(_mm_min_ps(_mm_min_ps(invW[0], invW[1]), invW[2]), occluderCache->c1, occluderCache->c0);
 			minZ = _mm_and_ps(minZ, _mm_cmpgt_ps(minZ, _mm_setzero_ps()));
 		}
 		else {
@@ -6143,12 +6143,12 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 		uint32_t alivePrimitive = 0;
 		uint16_t* pHiZBuffer = m_pHiz;
 		uint32_t pValidIdx = mAliveIdxMask[validMask];
-		if (bDrawOccludee && possiblyNearClipped == false)
+		if (bDrawOccludee && possiblyNearClipped == false && !bDrawOccludeeToDepthMap)
 		{
 			uint32_t pValidIdx2 = pValidIdx;
 
 			__m128 cx = _mm_add_ps(_mm_add_ps(x[0], x[1]), x[2]);
-			__m128 cy = _mm_add_ps(_mm_add_ps(x[0], x[1]), x[2]);
+			__m128 cy = _mm_add_ps(_mm_add_ps(y[0], y[1]), y[2]);
 			__m128 scaleC = _mm_set1_ps(1.0f/3.0f);
 			cx = _mm_mul_ps(cx, scaleC);
 			cy = _mm_mul_ps(cy, scaleC);
@@ -6302,7 +6302,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 	}
 	else
 	{
-		__m128 minZ = _mm_fmadd_ps(_mm_min_ps(_mm_min_ps(invW[0], invW[1]), invW[2]), occluderCache->c1, occluderCache->c0);
+		__m128 minZ = _mm_fmadd_ps_soc(_mm_min_ps(_mm_min_ps(invW[0], invW[1]), invW[2]), occluderCache->c1, occluderCache->c0);
 		minZ = _mm_and_ps(minZ, _mm_cmpgt_ps(minZ, _mm_setzero_ps()));
 		minZi = _mm_castps_si128(minZ);
 		depthBoundsMin = (uint32_t*)&minZi;
@@ -6348,7 +6348,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 	__m128 invArea = _mm_div_ps(negativeC1, negativeArea);
 
 
-	__m128 z0 = _mm_fmadd_ps(invW[0], occluderCache->c1, occluderCache->c0);
+	__m128 z0 = _mm_fmadd_ps_soc(invW[0], occluderCache->c1, occluderCache->c0);
 	__m128 z20 = _mm_sub_ps(invW[2], invW[0]);
 	__m128 z12 = _mm_sub_ps(invW[1], invW[2]);
 
@@ -6356,15 +6356,15 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 
 	// Compute screen space depth plane
 	__m128 depthPlane[3];
-	depthPlane[1] = _mm_mul_ps(invArea, _mm_fmsub_ps(z20, edgeNormalsX[1], _mm_mul_ps(z12, edgeNormalsX[2])));
-	depthPlane[2] = _mm_mul_ps(invArea, _mm_fmsub_ps(z20, edgeNormalsY[1], _mm_mul_ps(z12, edgeNormalsY[2])));
+	depthPlane[1] = _mm_mul_ps(invArea, _mm_fmsub_ps_soc(z20, edgeNormalsX[1], _mm_mul_ps(z12, edgeNormalsX[2])));
+	depthPlane[2] = _mm_mul_ps(invArea, _mm_fmsub_ps_soc(z20, edgeNormalsY[1], _mm_mul_ps(z12, edgeNormalsY[2])));
 
 
 	
 	// Depth at center of first pixel
 	__m128 refX = _mm_sub_ps(_mm_set1_ps(1.0f / 16.0f), x[0]);
 	__m128 refY = _mm_sub_ps(_mm_set1_ps(1.0f / 16.0f), y[0]);
-	depthPlane[0] = _mm_fmadd_ps(refX, depthPlane[1], _mm_fmadd_ps(refY, depthPlane[2], z0));
+	depthPlane[0] = _mm_fmadd_ps_soc(refX, depthPlane[1], _mm_fmadd_ps_soc(refY, depthPlane[2], z0));
 
 	// Flip edges if W < 0
 	__m128 edgeFlipMask[3];
@@ -6541,13 +6541,13 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 		__m128 depthLeftBase;
 		if (VRS_X4Y4_Optimzation)
 		{
-			depthLeftBase = _mm_fmadd_ps(depthDx, xFactors[xIncrease], _mm_set1_ps(depthPlaneData[0]));
+			depthLeftBase = _mm_fmadd_ps_soc(depthDx, xFactors[xIncrease], _mm_set1_ps(depthPlaneData[0]));
 			float halfSlope = slope * 0.5f;
 			depthLeftBase = _mm_add_ps(depthLeftBase, _mm_setr_ps(0, 0, halfSlope, halfSlope));
 		}
 		else
 		{
-			depthLeftBase = _mm_fmadd_ps(depthDx, _mm_setr_ps(0.0f, 0.125f, 0.25f, 0.375f), _mm_set1_ps(depthPlaneData[0]));
+			depthLeftBase = _mm_fmadd_ps_soc(depthDx, _mm_setr_ps(0.0f, 0.125f, 0.25f, 0.375f), _mm_set1_ps(depthPlaneData[0]));
 		}
 
 
@@ -6569,9 +6569,9 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 
 		//delay calculation of edgeNormalsX edgeNormalsY
 		//_mm_add_ps(edgeNormalsX[primitiveIdx], edgeNormalsY[primitiveIdx]), _mm_set1_ps(0.5f) is the central point of 8x8 block
-		__m128 edgeOffset = _mm_fmadd_ps(_mm_add_ps(edgeNormalsXP, edgeNormalsYP), _mm_set1_ps(0.5f), edgeOffsetsP);
+		__m128 edgeOffset = _mm_fmadd_ps_soc(_mm_add_ps(edgeNormalsXP, edgeNormalsYP), _mm_set1_ps(0.5f), edgeOffsetsP);
 		__m128 edge_mul = _mm_set1_ps(OFFSET_mul);
-		edgeOffset = _mm_fmadd_ps(edgeOffset, edge_mul, _mm_set1_ps(OFFSET_add));
+		edgeOffset = _mm_fmadd_ps_soc(edgeOffset, edge_mul, _mm_set1_ps(OFFSET_add));
 
 		__m128 edgeNormalX = _mm_mul_ps(edgeNormalsXP, edge_mul);
 		__m128 edgeNormalY = _mm_mul_ps(edgeNormalsYP, edge_mul);
@@ -6598,11 +6598,11 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 
 
 		__m128 blockMinYf = _mm_set1_ps(float(blockMinY));
-		__m128 rowDepthLeftOffsetY = _mm_fmadd_ps(depthBlockDelta, blockMinYf, rowDepthLeftBtmOffset);
-		__m128 edgeOffsetY = _mm_fmadd_ps(edgeNormalY, blockMinYf, edgeOffset);
+		__m128 rowDepthLeftOffsetY = _mm_fmadd_ps_soc(depthBlockDelta, blockMinYf, rowDepthLeftBtmOffset);
+		__m128 edgeOffsetY = _mm_fmadd_ps_soc(edgeNormalY, blockMinYf, edgeOffset);
 
 
-		__m128 offsetX = _mm_fmadd_ps(edgeNormalX, _mm_set1_ps((float)blockMinX), edgeOffsetY);
+		__m128 offsetX = _mm_fmadd_ps_soc(edgeNormalX, _mm_set1_ps((float)blockMinX), edgeOffsetY);
 		int32_t PreviousSkip = 65536;
 
 		uint32_t blockY = blockMinY;
@@ -6710,7 +6710,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 				//draw triangle
 				if (VRS_X4Y4_Optimzation)
 				{
-					__m128i rowDepthLeft = _mm_castps_si128(_mm_fmadd_ps(depthDx, _mm_set1_ps((float)blockX), rowDepthLeftOffsetY));
+					__m128i rowDepthLeft = _mm_castps_si128(_mm_fmadd_ps_soc(depthDx, _mm_set1_ps((float)blockX), rowDepthLeftOffsetY));
 
 					rowDepthLeft = _mm_max_epi32(rowDepthLeft, _mm_set1_epi32(primitiveMinZf));
 					rowDepthLeft = _mm_min_epi32(rowDepthLeft, _mm_set1_epi32(primitiveMaxZf));
@@ -6764,7 +6764,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 									__m128i* out = (__m128i*)outBlockData;
 									if (bDrawOccludee && Rasterize_ClippedOccludee_AS_OCCLUDER && !bDrawOccludeeToDepthMap) {
 										updateBlockMSCBPartial_Occludee(depth32, blockMask, out, occluderCache);
-										if (occluderCache->mRasterizedOccludeeVisible)
+										if (occluderCache->mRasterizedOccludeeVisible && !bDrawOccludeeToDepthMap)
 											return;
 									}
 									else {
@@ -6778,7 +6778,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 
 									if (bDrawOccludee && Rasterize_ClippedOccludee_AS_OCCLUDER && !bDrawOccludeeToDepthMap) {
 										updateBlockMSCBPartial_Occludee(depth32, blockMask, out, occluderCache);
-										if (occluderCache->mRasterizedOccludeeVisible)
+										if (occluderCache->mRasterizedOccludeeVisible && !bDrawOccludeeToDepthMap)
 											return;
 									}
 									else {
@@ -6889,7 +6889,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 							depthRows[1] = _mm_setr_epi32(depth32[2], depth32[2], depth32[3], depth32[3]);
 							if (bDrawOccludee && Rasterize_ClippedOccludee_AS_OCCLUDER && !bDrawOccludeeToDepthMap) {
 								occluderCache->mRasterizedOccludeeVisible = updateBlock_Occludee(depthRows, blockMask, (__m128i*)(outBlockData), pBlockRowHiZ);
-								if (occluderCache->mRasterizedOccludeeVisible)
+								if (occluderCache->mRasterizedOccludeeVisible && !bDrawOccludeeToDepthMap)
 								{
 									return;
 								}
@@ -6925,8 +6925,8 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 
 #if defined( SUPPORT_ALL_FEATURE)
 					__m128 depthDxHalf = _mm_set1_ps(depthPlaneData[4] * 0.5f);
-					__m128 lineDepthLeft = _mm_fmadd_ps(depthBlockDelta, _mm_set1_ps(float(blockY)), depthLeftBase);
-					__m128 rowDepthLeft = _mm_fmadd_ps(depthDx, _mm_set1_ps((float)blockX), lineDepthLeft);
+					__m128 lineDepthLeft = _mm_fmadd_ps_soc(depthBlockDelta, _mm_set1_ps(float(blockY)), depthLeftBase);
+					__m128 rowDepthLeft = _mm_fmadd_ps_soc(depthDx, _mm_set1_ps((float)blockX), lineDepthLeft);
 					__m128 rowDepthRight = _mm_add_ps(depthDxHalf, rowDepthLeft);
 
 					if (blockMask != -1 && bPixelAABBClipping)
@@ -6988,7 +6988,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 
 							NextBlockX = blockMinX + CurrentSkip;
 						}
-                        offsetX = _mm_fmadd_ps(edgeNormalX, _mm_set1_ps((float)NextBlockX), edgeOffsetY);
+                        offsetX = _mm_fmadd_ps_soc(edgeNormalX, _mm_set1_ps((float)NextBlockX), edgeOffsetY);
                     }
 					else
 					{
@@ -7038,9 +7038,9 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 							pOffsetHiZ += blocksX * dy;
 							outblockRowData += blocksXRows * dy;
 							__m128 dyFv = _mm_set1_ps((float)dy);
-							edgeOffsetY = _mm_fmadd_ps(edgeNormalY, dyFv, edgeOffsetY);
+							edgeOffsetY = _mm_fmadd_ps_soc(edgeNormalY, dyFv, edgeOffsetY);
 							offsetX = _mm_add_ps(edgeNormalXBlockMinX, edgeOffsetY);
-							rowDepthLeftOffsetY = _mm_fmadd_ps(depthBlockDelta, dyFv, rowDepthLeftOffsetY);
+							rowDepthLeftOffsetY = _mm_fmadd_ps_soc(depthBlockDelta, dyFv, rowDepthLeftOffsetY);
 
 							NextBlockX = blockMinX;
 							CurrentSkip = 0;
@@ -7081,7 +7081,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 						pOffsetHiZ += blocksX;
 						outblockRowData += blocksXRows;
 						edgeOffsetY = _mm_add_ps(edgeOffsetY, edgeNormalY);
-						offsetX = _mm_fmadd_ps(edgeNormalX, _mm_set1_ps((float)blockMinX), edgeOffsetY);
+						offsetX = _mm_fmadd_ps_soc(edgeNormalX, _mm_set1_ps((float)blockMinX), edgeOffsetY);
 						rowDepthLeftOffsetY = _mm_add_ps(rowDepthLeftOffsetY, depthBlockDelta);
 						CurrentSkip = 0;
 						NextBlockX = blockMinX;
@@ -7100,8 +7100,8 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 			{
 				pOffsetHiZ += blocksX;
 				outblockRowData += blocksXRows;
-				edgeOffsetY = _mm_fmadd_ps(edgeNormalY, _mm_set1_ps((float)blockY) , edgeOffset);
-				offsetX = _mm_fmadd_ps(edgeNormalX, _mm_set1_ps((float)blockMinX), edgeOffsetY);
+				edgeOffsetY = _mm_fmadd_ps_soc(edgeNormalY, _mm_set1_ps((float)blockY) , edgeOffset);
+				offsetX = _mm_fmadd_ps_soc(edgeNormalX, _mm_set1_ps((float)blockMinX), edgeOffsetY);
 				rowDepthLeftOffsetY = _mm_add_ps(rowDepthLeftOffsetY, depthBlockDelta);
 				NextBlockX = blockMinX;
 			}
@@ -7210,20 +7210,20 @@ void Rasterizer::SplitToTwoTriangles(__m128* X, __m128* Y, __m128* W, __m128* in
 			invW2[1] = invW[2];
 			invW2[2] = invW[3];
 			drawTriangle< possiblyNearClipped, bBackFaceCulling, bDrawOccludee>(X2, Y2, invW2, W2, primitiveValid, occluderCache);
-			if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+			if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible && !bDrawOccludeeToDepthMap)
 				return;
 			if (DebugOccluderOccludee)
 			{
 				DebugData[PrimitiveValidNum] = DebugData[PrimitiveValidNumQuad];
 			}
 			drawTriangle< possiblyNearClipped, bBackFaceCulling, bDrawOccludee>(X, Y, invW, W, primitiveValid, occluderCache);
-			if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+			if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible && !bDrawOccludeeToDepthMap)
 				return;
 		}
 		else
 		{
 			drawTriangle< possiblyNearClipped, bBackFaceCulling, bDrawOccludee>(X, Y, invW, W, primitiveValid, occluderCache);
-			if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+			if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible && !bDrawOccludeeToDepthMap)
 				return;
 			X[1] = X[0];
 			Y[1] = Y[0];
@@ -7235,7 +7235,7 @@ void Rasterizer::SplitToTwoTriangles(__m128* X, __m128* Y, __m128* W, __m128* in
 				DebugData[PrimitiveValidNum] = DebugData[PrimitiveValidNumQuad];
 			}
 			drawTriangle< possiblyNearClipped, bBackFaceCulling, bDrawOccludee>(X + 1, Y + 1, invW + 1, W + 1, primitiveValid, occluderCache);
-			if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+			if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible && !bDrawOccludeeToDepthMap)
 				return;
 		}
 	}
@@ -7265,7 +7265,7 @@ void Rasterizer::SplitToTwoTriangles(__m128* X, __m128* Y, __m128* W, __m128* in
 				invW2[1] = invW[2];
 				invW2[2] = invW[3];
 				drawTriangle< possiblyNearClipped, bBackFaceCulling, bDrawOccludee>(X2, Y2, invW2, W2, primitiveValid0, occluderCache);
-				if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+				if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible && !bDrawOccludeeToDepthMap)
 					return;
 			}
 		}
@@ -7280,7 +7280,7 @@ void Rasterizer::SplitToTwoTriangles(__m128* X, __m128* Y, __m128* W, __m128* in
 				DebugData[PrimitiveValidNum] = DebugData[PrimitiveValidNumQuad];
 			}
 			drawTriangle< possiblyNearClipped, bBackFaceCulling, bDrawOccludee>(X, Y, invW, W, primitiveValid0, occluderCache);
-			if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+			if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible && !bDrawOccludeeToDepthMap)
 				return;
 		}
 
@@ -7299,7 +7299,7 @@ void Rasterizer::SplitToTwoTriangles(__m128* X, __m128* Y, __m128* W, __m128* in
 					DebugData[PrimitiveValidNum] = DebugData[PrimitiveValidNumQuad];
 				}
 				drawTriangle< possiblyNearClipped, bBackFaceCulling, bDrawOccludee>(X + 1, Y + 1, invW + 1, W + 1, primitiveValid0, occluderCache);
-				if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible)
+				if (bDrawOccludee && occluderCache->mRasterizedOccludeeVisible && !bDrawOccludeeToDepthMap)
 					return;
 			}
 		}
@@ -7511,9 +7511,9 @@ void Rasterizer::HandleDrawMode(__m128* x, __m128* y, __m128* z, uint32_t aliveP
 
 		__m128 c0 = OccluderCache->c0;
 		__m128 c1 = OccluderCache->c1;
-		z[0] = _mm_fmadd_ps(invW[0], c1, c0);
-		z[1] = _mm_fmadd_ps(invW[1], c1, c0);
-		z[2] = _mm_fmadd_ps(invW[2], c1, c0);
+		z[0] = _mm_fmadd_ps_soc(invW[0], c1, c0);
+		z[1] = _mm_fmadd_ps_soc(invW[1], c1, c0);
+		z[2] = _mm_fmadd_ps_soc(invW[2], c1, c0);
 	}
 
 	if (bDebugOccluderOnly) {

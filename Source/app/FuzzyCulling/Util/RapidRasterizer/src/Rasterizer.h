@@ -272,7 +272,7 @@ public:
 		__m128 invExtents = _mm_and_ps(InvExtents, positive);
 		//temp set of rasterize required input
 		this->FullMeshInvExtents[0] = invExtents;
-		this->FullMeshInvExtents[1] = _mm_fmadd_ps(_mm_negate_ps_soc(invExtents), meshMin, _mm_setr_ps(0, 0, 0, 1));
+		this->FullMeshInvExtents[1] = _mm_fmadd_ps_soc(_mm_negate_ps_soc(invExtents), meshMin, _mm_setr_ps(0, 0, 0, 1));
 	}
 
 };

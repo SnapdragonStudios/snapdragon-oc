@@ -122,18 +122,66 @@ inline __m128 _mm_mul_ps_scalar_soc(__m128 a, __m128 b, int bIdx)
 inline float _mm_dp_ps_float_soc(__m128 a, __m128 b)
 {
 	__m128 dist5 = _mm_dp_ps(a, b, 0xff);
-	float r[4];
-	_mm_store_ps(r, dist5);
-	return r[0];
+	float* f = (float*)&dist5;
+	return f[0];
 }
 
-inline __m128 _mm_cmpAbslt_ps_soc(__m128 a, __m128 b)
+
+//**********************************************************************************
+//below FMA functions should never be called!!!!
+//this is to make sure all x86 platforms with SSE2 support could work
+inline __m128 _mm_fmadd_ps(const __m128& a, const __m128& b, const __m128& c)
 {
-	return _mm_cmplt_ps(_mm_abs_ps_soc(a), _mm_abs_ps_soc(b));
+	__m128 d = _mm_mul_ps(a, b);
+	return _mm_add_ps(d, c);
 }
+
+inline __m128 _mm_fmsub_ps(const __m128& a, const __m128& b, const __m128& c)
+{
+	__m128 d = _mm_mul_ps(a, b);
+	return _mm_sub_ps(d, c);
+}
+
+inline __m128 _mm_fmaddsub(const __m128& a, const __m128& b, const __m128& c)
+{
+	//not implemented. for error detection only
+	__m128 d = _mm_mul_ps(a, b);
+	return _mm_add_ps(d, c);
+}
+inline __m128 _mm_fmsubadd(const __m128& a, const __m128& b, const __m128& c)
+{
+	//not implemented. for error detection only
+	__m128 d = _mm_mul_ps(a, b);
+	return _mm_add_ps(d, c);
+}
+inline __m128 _mm_fnmadd_ps(const __m128& a, const __m128& b, const __m128& c)
+{
+	return _mm_sub_ps(c, _mm_mul_ps(a, b));
+}
+//**********************************************************************************
+//below expanded FMA functions should be called!!!!
+inline __m128 _mm_fmsub_ps_soc(const __m128& a, const __m128& b, const __m128& c)
+{
+	return _mm_sub_ps(_mm_mul_ps(a, b), c);
+}
+
+inline __m128 _mm_fmadd_ps_soc(const __m128& a, const __m128& b, const __m128& c)
+{
+	return _mm_add_ps(_mm_mul_ps(a, b), c);
+}
+
+inline __m128 _mm_fnmadd_ps_soc(const __m128& a, const __m128& b, const __m128& c)
+{
+	return _mm_sub_ps(c, _mm_mul_ps(a, b));
+}
+//**********************************************************************************
+
+
+
+
 inline __m128 _mm_fmadd_ps_soc(const __m128 &a, float b, const __m128 &c)
 {
-	return  _mm_fmadd_ps(a, _mm_set1_ps(b), c);
+	return  _mm_fmadd_ps_soc(a, _mm_set1_ps(b), c);
 }
 inline __m128i _mm_cmple_epi32_soc(__m128i a, __m128i b) {
 	return _mm_andnot_si128(_mm_cmpgt_epi32(a, b), _mm_set_epi32(~0, ~0, ~0, ~0));
@@ -168,23 +216,16 @@ inline __m128i _mm_slli_epi8(const __m128i &_A, int _Imm) {
 }
 
 
+inline uint16_t _mm_min_epu16(const __m128i& a)
+{
+	return _mm_extract_epi16(_mm_minpos_epu16(a), 0);
+}
+
+//_mm_max_epu16_even's odd index are all zero in the real usage
 inline uint16_t _mm_max_epu16_even(const __m128i& a)
 {
-	__m128i b = _mm_srli_epi64(a, 32);
-	b = _mm_max_epu16(a, b);
-	uint16_t * data = (uint16_t*)& b;
-	return std::max(data[0], data[4]);
-
-////#if defined(SDOC_WIN)
-////	__declspec(align(16)) uint16_t result[8] = { 0 };
-////#elif defined(SDOC_OSX)
-////	__attribute__((aligned(16))) uint16_t result[8] = { 0 };
-////#endif
-////
-////	_mm_storeu_si128((__m128i *)result, a);
-////	uint16_t r2 = *std::max_element(result, result + 8);
-////	if (r1 != r2) std::cout << "ERROR " << r1 << " r2 " << r2 << std::endl;
-////	return r1;
+	__m128i allOne = _mm_set1_epi32(-1);
+	return 65535 - _mm_min_epu16(_mm_xor_si128(a, allOne));
 }
 
 inline __m128i _mm_packus_epi32(const __m128i &a)
@@ -198,24 +239,6 @@ inline __m128 _mm_hadd_ps(__m128 a)
 	return _mm_hadd_ps(a, a);
 }
 
-inline uint16_t _mm_min_epu16(const __m128i &a)
-{
-////#if defined(SDOC_WIN)
-////	__declspec(align(16)) uint16_t result[8] = { 0 };
-////#elif defined(SDOC_OSX)
-////    __attribute__((aligned(16))) uint16_t result[8] = { 0 };
-////#endif
-////	_mm_storeu_si128((__m128i *)result, a);
-////	uint16_t x= *std::min_element(result, result + 8);
-
-	__m128i c = _mm_srli_epi32(a, 16);
-	c = _mm_min_epu16(a, c);
-
-	__m128i b = _mm_srli_epi64(c, 32);
-	b = _mm_min_epu16(c, b);
-	uint16_t * data = (uint16_t*)& b;
-	return std::min(data[0], data[4]);
-}
 
 inline bool _mm_same_sign0(__m128 a)
 {
@@ -234,49 +257,11 @@ inline __m128 _mm_max4_ps_soc(__m128 a)
 	__m128 maxExtent = _mm_max_ps(a, _mm_shuffle_ps(a, a, _MM_SHUFFLE(1, 0, 3, 2)));
 	return _mm_max_ps(maxExtent, _mm_shuffle_ps(maxExtent, maxExtent, _MM_SHUFFLE(2, 3, 0, 1)));
 }
-//inline __m128 _mm_min_minXY_min_maxXY_ps_soc(__m128 minsXY, __m128 maxsXY)
-//{
-//	float r[4];
-//	_mm_store_ps(r, minsXY);
-//
-//	r[0] = std::min(r[0], r[1]);
-//	r[1] = std::min(r[2], r[3]);
-//
-//	float m[4];
-//	_mm_store_ps(m, maxsXY);
-//	r[2] = std::min(m[0], m[1]);
-//	r[3] = std::min(m[2], m[3]);
-//	
-//	return _mm_load_ps(r);
-//}
-
-
-//inline bool _mm_same_sign0_firstThree_soc(__m128 a)
-//{
-//	int val = _mm_movemask_ps(a);
-//	val &= 7;
-//	return val == 0;
-//}
-
-//inline bool _mm_any_sign0_firstThree_soc(__m128 a)
-//{
-//	int val = _mm_movemask_ps(a);
-//	val &= 7;
-//	return val != 7;
-//}
-
-//inline bool _mm_any_sign0_soc(__m128 a)
-//{
-//	int val = _mm_movemask_ps(a);
-//	val &= 15;
-//	return val != 15;
-//}
 
 inline bool _mm_same_sign1_firstThree_soc(__m128 a)
 {
 	int val = _mm_movemask_ps(a);
-	val &= 7;
-	return val == 7;
+	return (val&7) == 7;
 }
 
 inline bool _mm_same_sign1_soc(__m128 a)
@@ -295,9 +280,7 @@ inline uint64_t _mm_getUint16Max8_soc(__m128i a)
 	r16 = _mm_srli_epi16(a, 8); //after right shift b>=1 unsigned var fits into signed range, so we could use _mm_packus_epi16 (signed 16 to unsigned 8)
 	r16 = _mm_packus_epi16(r16, r16); //saturate and  narrow, use low 64 bits only
 
-	uint64_t r[2];
-	_mm_store_si128((__m128i*)r, r16);
-	return r[0];
+	return _mm_extract_epi64(r16, 0);
 }
 
 

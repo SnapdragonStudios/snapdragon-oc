@@ -70,6 +70,7 @@ elseif ((${CMAKE_SYSTEM_NAME} STREQUAL Windows) )
     set(SDOC_LIB_EXPORT 1)
     add_definitions(-DSDOC_LIB_EXPORT)
     set(SDOC_WIN 1)
+
     add_definitions(-DSDOC_WIN)
 elseif ((${CMAKE_SYSTEM_NAME} STREQUAL Android) OR (${CMAKE_SYSTEM_NAME} STREQUAL iOS))
     message(STATUS "SDOC Mobile")

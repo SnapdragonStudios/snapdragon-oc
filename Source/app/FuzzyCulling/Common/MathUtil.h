@@ -93,9 +93,9 @@ namespace common
 			{
 				__m128 curr = a.Row[row];
 				__m128 internal = _mm_mul_ps(_mm_shuffle_ps_single_index(curr, 0), b.Row[0]);
-				internal =  _mm_fmadd_ps(_mm_shuffle_ps_single_index(curr, 1), b.Row[1], internal);
-				internal =  _mm_fmadd_ps(_mm_shuffle_ps_single_index(curr, 2), b.Row[2], internal);
-				internal =  _mm_fmadd_ps(_mm_shuffle_ps_single_index(curr, 3), b.Row[3], internal);
+				internal =  _mm_fmadd_ps_soc(_mm_shuffle_ps_single_index(curr, 1), b.Row[1], internal);
+				internal =  _mm_fmadd_ps_soc(_mm_shuffle_ps_single_index(curr, 2), b.Row[2], internal);
+				internal =  _mm_fmadd_ps_soc(_mm_shuffle_ps_single_index(curr, 3), b.Row[3], internal);
 				c.Row[row] = internal;
 			}
 		}
