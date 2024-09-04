@@ -24,7 +24,7 @@
 #include <libkern/OSByteOrder.h>
 #endif
 
-namespace common
+namespace SDOCCommon
 {
 
 	inline uint64_t sdoc_bswap_64(uint64_t mask)

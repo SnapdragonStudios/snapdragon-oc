@@ -22,7 +22,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #include <sys/stat.h>
 #include <string>
 
-namespace common
+namespace SDOCCommon
 {
 	struct Vec3f
 	{

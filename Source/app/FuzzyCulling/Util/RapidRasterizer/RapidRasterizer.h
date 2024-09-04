@@ -12,7 +12,7 @@
 #include "Common/SOCUtil.h"
 
 
-namespace util
+namespace SDOCUtil
 {
 
 #ifdef HIDE_RASTERIZER
@@ -112,7 +112,7 @@ public:
 
 	void OnRenderFinish();
 	// dump depth map
-    bool dumpDepthMap(unsigned char *depthMap, common::DumpImageMode mode) ;
+    bool dumpDepthMap(unsigned char *depthMap, SDOCCommon::DumpImageMode mode) ;
 
 	void configCoherentMode(int interleaveRatio);
 
@@ -149,7 +149,7 @@ public:
 
 	int mCurrentOccluderIdx = 0;
 
-	common::Matrix4x4 mViewProjT;
+	SDOCCommon::Matrix4x4 mViewProjT;
 	
 	bool mBackFaceCullOffFirst = true;
 

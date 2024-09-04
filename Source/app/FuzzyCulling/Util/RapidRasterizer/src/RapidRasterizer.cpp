@@ -16,7 +16,7 @@
 #include <fstream>
 #include "OccluderQuad.h"
 
-namespace util
+namespace SDOCUtil
 {
 
 	
@@ -58,7 +58,7 @@ void RapidRasterizer::setResolution(unsigned int width, unsigned int height)
 
 
 
-bool RapidRasterizer::dumpDepthMap(unsigned char *depthMap, common::DumpImageMode mode) 
+bool RapidRasterizer::dumpDepthMap(unsigned char *depthMap, SDOCCommon::DumpImageMode mode) 
 {
 	OnRenderFinish();
     if (!depthMap)
@@ -206,7 +206,7 @@ void RapidRasterizer::onNewFrame(uint64_t frame, bool criticalFrame, bool isRota
 	m_instance->mInterleave.CurrentFrameInterleaveDrawing =
 		!criticalFrame
 		&& this->m_instance->InterleaveRendering
-		&& (this->mFrameNum > (common::START_FRAME_COUNT + 1))
+		&& (this->mFrameNum > (SDOCCommon::START_FRAME_COUNT + 1))
 		&& this->m_instance->mDebugRenderType == 0;
 
 	this->mInRenderingState = true;
@@ -289,10 +289,10 @@ bool RapidRasterizer::RasterizeOccludeeMesh(OccluderInput* occ, const float* wor
 		cache.m_localToClipPointer = m_instance->m_OccludeelocalToClip;
 	}
 	else {
-		common::Matrix4x4 LocalToWorldT;
+		SDOCCommon::Matrix4x4 LocalToWorldT;
 		LocalToWorldT.updateTranspose(occ->modelWorld);
-		common::Matrix4x4 LocalToClipT;
-		common::Matrix4x4::Multiply(mViewProjT, LocalToWorldT, LocalToClipT);
+		SDOCCommon::Matrix4x4 LocalToClipT;
+		SDOCCommon::Matrix4x4::Multiply(mViewProjT, LocalToWorldT, LocalToClipT);
 		m_instance->setModelViewProjectionT(LocalToClipT, false, &cache);
 	}
 
@@ -303,13 +303,13 @@ bool RapidRasterizer::RasterizeOccludeeMesh(OccluderInput* occ, const float* wor
 		m_instance->prepareOccludeeRasterization(occ->inVtx, &cache);
 		{
 			cache.FlipOccluderFace = NeedFlipFace(occ->modelWorld);
-			common::OccluderMesh raw;
+			SDOCCommon::OccluderMesh raw;
 
 			cache.SuperFlatOccludee = meta[0] & (1<<7);
 
 			raw.EnableBackface = meta[0] & 1;
 			raw.AABBMode = meta[0] >> 8;
-			raw.SuperCompress = meta[1] <= common::SuperCompressVertNum;
+			raw.SuperCompress = meta[1] <= SDOCCommon::SuperCompressVertNum;
 			raw.QuadSafeBatchNum = meta[2];
 			raw.TriangleBatchIdxNum = meta[3];
 
@@ -344,7 +344,7 @@ bool RapidRasterizer::RasterizeOccludeeMesh(OccluderInput* occ, const float* wor
 			cache.UpdateMeshInv(minExtents);
 			cache.FlipOccluderFace = NeedFlipFace(occ->modelWorld);
 
-			common::OccluderMesh raw;
+			SDOCCommon::OccluderMesh raw;
 
 			float flat_ratio = GetSuperFlatOccldueeRatio();
 			if (minExtents[5] < minExtents[3] * flat_ratio && minExtents[5] < minExtents[4] * flat_ratio) {
@@ -368,11 +368,11 @@ bool RapidRasterizer::RasterizeOccluder(OccluderInput* occ)
 {
 	m_instance->mUpdateAnyBlock = false;
 
-	common::Matrix4x4 LocalToWorldT;
+	SDOCCommon::Matrix4x4 LocalToWorldT;
 	LocalToWorldT.updateTranspose(occ->modelWorld);
 
-	common::Matrix4x4 LocalToClipT;
-	common::Matrix4x4::Multiply(mViewProjT, LocalToWorldT, LocalToClipT);
+	SDOCCommon::Matrix4x4 LocalToClipT;
+	SDOCCommon::Matrix4x4::Multiply(mViewProjT, LocalToWorldT, LocalToClipT);
 
 	OccluderRenderCache* cache = m_instance->mOccluderCache;
 	m_instance->setModelViewProjectionT(LocalToClipT, false, cache);
@@ -392,10 +392,10 @@ bool RapidRasterizer::RasterizeOccluder(OccluderInput* occ)
 
 			uint16_t *meta = (uint16_t *)occ->inVtx;
 
-			common::OccluderMesh raw;
+			SDOCCommon::OccluderMesh raw;
 			raw.EnableBackface = meta[0] & 1;
 			raw.AABBMode = meta[0] >> 8;
-			raw.SuperCompress = meta[1] <= common::SuperCompressVertNum;
+			raw.SuperCompress = meta[1] <= SDOCCommon::SuperCompressVertNum;
 			raw.QuadSafeBatchNum = meta[2];
 			raw.TriangleBatchIdxNum = meta[3];
 
@@ -427,7 +427,7 @@ bool RapidRasterizer::RasterizeOccluder(OccluderInput* occ)
 			
 			cache->FlipOccluderFace = NeedFlipFace(occ->modelWorld);			
 
-			common::OccluderMesh raw;
+			SDOCCommon::OccluderMesh raw;
 			raw.Indices = occ->inIdx;
 			raw.Vertices = occ->inVtx;
 			raw.TriangleBatchIdxNum = occ->nIdx;

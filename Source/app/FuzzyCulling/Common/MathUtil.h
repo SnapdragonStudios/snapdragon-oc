@@ -18,7 +18,7 @@
 #include <sys/stat.h>
 #include <string>
 
-namespace common
+namespace SDOCCommon
 {
 
 	static const std::string CAPTURE_PREFIX = "SCAP";

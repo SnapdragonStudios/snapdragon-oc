@@ -24,7 +24,7 @@
 #include <string>
 #include "Common/CompilerSpecificSIMD.h"
 
-namespace util
+namespace SDOCUtil
 {
 	struct QuadTriIndex
 	{
@@ -251,7 +251,7 @@ namespace util
 		int QuadKids = 0;//only allow Quad merge in case that Quad Kids = 1
 		uint16_t vIdx[4];
 
-		bool MergeWith(MeshQuad* q, float sameFaceTh, __m128* vertices, util::MeshVertex* MeshVertices, bool IsTerrain, int& TotalMerged, float ProjectLineMidAngleTh);
+		bool MergeWith(MeshQuad* q, float sameFaceTh, __m128* vertices, SDOCUtil::MeshVertex* MeshVertices, bool IsTerrain, int& TotalMerged, float ProjectLineMidAngleTh);
 		bool IsPlanarQuad = false;
 
 		bool containPoint(uint16_t nVertIdx)
@@ -284,12 +284,12 @@ namespace util
 	public:
 		OccluderBakeBuffer* mParent = nullptr;
 		BakeRequest* mRequest = nullptr;
-		util::MeshFace* mFaces = nullptr;
-		util::MeshQuad* mQuads = nullptr;
-		util::MeshVertex* mVertices = nullptr;
+		SDOCUtil::MeshFace* mFaces = nullptr;
+		SDOCUtil::MeshQuad* mQuads = nullptr;
+		SDOCUtil::MeshVertex* mVertices = nullptr;
 
 		bool mIsPlanarMesh = false;
-		void QuickMerge(MeshQuad* q0, MeshQuad* q1, float QuadTwoSameFaceTh, __m128* points, util::MeshVertex*& Vertices, int& neighborMergeCount, float lineLinkTH, bool allowDiffKidMerge);
+		void QuickMerge(MeshQuad* q0, MeshQuad* q1, float QuadTwoSameFaceTh, __m128* points, SDOCUtil::MeshVertex*& Vertices, int& neighborMergeCount, float lineLinkTH, bool allowDiffKidMerge);
 
 		uint16_t* GetIndicesBySize(uint32_t size);
 
@@ -325,8 +325,11 @@ namespace util
 			return 0.1f;
 		}
 
-
+		//SDOC_Get_BakeData_QuadTriangleNum: provide any array of uint16, first/second would be used to store Quad/Triangle number, 
+		//the coming 4 uint16 would store first 4 elements of baked data
 		static void Get_BakeData_QuadTriangleNum(uint16_t* value);
+		//Extract Quad/Triangle batch number from bakedata, QuadSafeBatchNum, TriangleBatchIdxNum to store results
+		static void Get_BakeData_QuadTriangleNum(uint16_t* BakedOccluderData, uint16_t* QuadSafeBatchNum, uint16_t* TriangleBatchIdxNum);
 	public:
 
 		static void checkRectangleQuad(MeshQuad* q, __m128* vertices);
@@ -339,7 +342,7 @@ namespace util
 		static void SetTerrainGridOptimization(int value);
 
 
-		static void HandleSquareTerrainInput(util::OccluderBakeBuffer* pBakeBuffer, const uint16_t* indices, unsigned int nIdx, const float* inputVertices, int vertNum, QuadTriIndex& qti, float quadAngle, int terrainGridWidth);
+		static void HandleSquareTerrainInput(SDOCUtil::OccluderBakeBuffer* pBakeBuffer, const uint16_t* indices, unsigned int nIdx, const float* inputVertices, int vertNum, QuadTriIndex& qti, float quadAngle, int terrainGridWidth);
 		static void SetTerrainRectangleAngle(unsigned int configValue);
 		static void SetTerrainRectangleMergeAngle(unsigned int configValue);
 		static void SetSaveModel(bool saveModel);
@@ -352,18 +355,18 @@ namespace util
 	private:
 		static unsigned short* sdocMeshBake(int* outputCompressSize, const float* vertices, const unsigned short* indices, unsigned int nVert, unsigned int nIdx, float quadAngle, bool enableBackfaceCull, bool counterClockWise, int TerrainGridAxisPoint);
 
-		static bool MergeQuad(MeshQuad* q0, MeshQuad* q1, __m128* points, util::MeshVertex* Vertices, bool isTerrain, int& totalMerged, float lineLinkTH, bool allowDiffKidMerge);
+		static bool MergeQuad(MeshQuad* q0, MeshQuad* q1, __m128* points, SDOCUtil::MeshVertex* Vertices, bool isTerrain, int& totalMerged, float lineLinkTH, bool allowDiffKidMerge);
 		static void ConfigControlParameters(bool isTerrain);
-		static void SetRectangleDegreeToZero(util::MeshVertex* Vertices, uint32_t nVert);
+		static void SetRectangleDegreeToZero(SDOCUtil::MeshVertex* Vertices, uint32_t nVert);
 	public:
 		static void TestModel();
 #if defined(SDOC_NATIVE)
 		static bool sdocMeshSimplify(float* vertices, unsigned short* indices, unsigned int& nVert, unsigned int& nIdx, int modelId, unsigned int targetFaceNum, bool saveModel);
 #endif
 	private:
-		static bool MergeTriangleIntoQuad(MeshFace* face, MeshQuad* mq, util::MeshVertex& vert, __m128* points, util::MeshVertex* vertices);
+		static bool MergeTriangleIntoQuad(MeshFace* face, MeshQuad* mq, SDOCUtil::MeshVertex& vert, __m128* points, SDOCUtil::MeshVertex* vertices);
 		static bool sameLine(__m128* points, uint16_t a, uint16_t b, uint16_t c);
-		static int getAABBMode(util::QuadTriIndex &quadData, const uint16_t* pIndexCurrent);
+		static int getAABBMode(SDOCUtil::QuadTriIndex &quadData, const uint16_t* pIndexCurrent);
 	public:
 		static void ConfigDebugOccluder(int occluderID, uint16_t* CompactData);
 		static void EnableMaxDepthToQueryOccludeeMesh(uint16_t* bakeData);

@@ -27,7 +27,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 namespace
 {
-	using namespace common;
+	using namespace SDOCCommon;
 	static constexpr unsigned int PerPool_Unit = 10;
 	static constexpr unsigned int PerPool_SIZE = 1 << PerPool_Unit;
     static const unsigned int TIMEOUT = 5;
@@ -1730,7 +1730,7 @@ private:
     }
 } // namespace
 
-namespace common
+namespace SDOCCommon
 {
     static MeshReducerPrivate * reducer = nullptr;
     void MeshReducer::release() 

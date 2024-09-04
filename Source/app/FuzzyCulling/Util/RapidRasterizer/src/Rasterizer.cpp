@@ -44,7 +44,7 @@
 #include <unistd.h>
 #include <fstream>
 #endif
-using namespace common;
+using namespace SDOCCommon;
 
 #if defined(SDOC_ANDROID) || defined(__aarch64__)
 #define SDOC_ARM
@@ -57,7 +57,7 @@ using namespace common;
 //3. off backface culling: set bDebugForceBackfaceCullingOFF to true
 //4. enable bDebugVerySmallOccluders to relax mask constraints for small occluders
 //****************************************************************************************************************************************
-namespace util
+namespace SDOCUtil
 {
 	static constexpr bool bEnableOccludeeOBBQuery = false; //if wish to use OBB query, set this to true
 
@@ -104,6 +104,9 @@ namespace util
 
 	static constexpr bool bConvexOptimization = true;
 
+	//once enabled, occludee would not be rasterized
+	static constexpr bool gDrawOccludeeNoRasterization = 0;
+	static constexpr int32_t gDrawOccludeeNoRasterizationAreaThreshold = 64;
 
 	static constexpr bool bDrawOccludeeToDepthMap = false; //Debug function, draw all primitives in occludee to depth map. Early exit would be disabled!!!
 	static constexpr bool bForceMeshLineDebug = false;
@@ -414,7 +417,7 @@ void Rasterizer::setResolution(unsigned int width, unsigned int height)
 	m_MaxCoordOccludee_WHWH = _mm_setr_epi32(m_width - 1, m_height - 1, m_width - 1, m_height - 1);
 }
 
-void Rasterizer::setModelViewProjectionT(const common::Matrix4x4 &input, bool simpleOccludee, OccluderRenderCache* occ)
+void Rasterizer::setModelViewProjectionT(const SDOCCommon::Matrix4x4 &input, bool simpleOccludee, OccluderRenderCache* occ)
 {
 
     __m128 mat0 = input.Row[0];
@@ -2748,7 +2751,7 @@ float decompressFloat(uint16_t depth)
 	} U = { uint32_t(depth) << 12 };
 	return  (U.f * bias);
 }
-uint64_t Rasterizer::applyToneMapping(__m128i a, common::DumpImageMode mode)
+uint64_t Rasterizer::applyToneMapping(__m128i a, SDOCCommon::DumpImageMode mode)
 {
 
 	if (mode == DumpFullMin)
@@ -2788,7 +2791,7 @@ uint64_t Rasterizer::applyToneMapping(__m128i a, common::DumpImageMode mode)
 	}
 	return result;
 }
-bool Rasterizer::readBackDepth(unsigned char *target, common::DumpImageMode mode)
+bool Rasterizer::readBackDepth(unsigned char *target, SDOCCommon::DumpImageMode mode)
 {
 
 #if defined( SUPPORT_ALL_FEATURE)
@@ -2887,7 +2890,7 @@ bool Rasterizer::readBackDepth(unsigned char *target, common::DumpImageMode mode
 
 #if defined(SDOC_NATIVE_DEBUG)
 	
-	if (mode == common::DumpImageMode::DumpHiz) 
+	if (mode == SDOCCommon::DumpImageMode::DumpHiz) 
 	{
 		uint16_t * hzPointer = this->m_pHiz;
 
@@ -3717,7 +3720,7 @@ void Rasterizer::precomputeRasterizationTable()
 }
 
 
-void Rasterizer::doRasterize(common::OccluderMesh& raw, OccluderRenderCache* occluderCache)
+void Rasterizer::doRasterize(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache)
 {
 		int key = (int)occluderCache->NeedsClipping << 1;  //2
 		key |= (int)(raw.Indices == nullptr);                    //1
@@ -3809,7 +3812,7 @@ static int GetValidPrimitiveNum(__m128 primitiveValid)
 template <bool bPixelAABBClippingQuad, bool bDrawOccludee>
 void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128 primitiveValid, __m128* edgeNormalsX, __m128* edgeNormalsY, __m128* areas, OccluderRenderCache* occluderCache)
 {
-	if (bDrawOccludee && bSplitQuadToTriangleForOccludee) return;
+	if (bDrawOccludee && bSplitQuadToTriangleForOccludee && !gDrawOccludeeNoRasterization) return;
 	PrimitiveBoundaryClipCache* PrimitivePixelClip = &occluderCache->mPixelClip;
 	__m128 minFx, minFy, maxFx, maxFy;
 
@@ -3887,6 +3890,55 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 		uint32_t alivePrimitive = 0;
 		uint16_t *pHiZBuffer = m_pHiz;
 		uint32_t pValidIdx = mAliveIdxMask[validMask];
+		if (bDrawOccludee && gDrawOccludeeNoRasterization) {
+			int largePrimitiveIdx = 0;
+			bool hasLargePrimitive = false;
+			auto scale8 = _mm_set1_ps(8);
+			__m128i pixel[4];
+			pixel[0] = _mm_cvttps_epi32(_mm_mul_ps(minFx, scale8));
+			pixel[0] = _mm_max_epi32(pixel[0], _mm_set1_epi32(0));
+			pixel[1] = _mm_cvttps_epi32(_mm_mul_ps(maxFx, scale8));
+			pixel[1] = _mm_min_epi32(pixel[1], _mm_set1_epi32(this->m_width-1));
+
+			pixel[2] = _mm_cvttps_epi32(_mm_mul_ps(minFy, scale8));
+			pixel[2] = _mm_max_epi32(pixel[2], _mm_set1_epi32(0));
+			pixel[3] = _mm_cvttps_epi32(_mm_mul_ps(maxFy, scale8));
+			pixel[3] = _mm_min_epi32(pixel[3], _mm_set1_epi32(this->m_height - 1));
+
+			__m128i dx = _mm_sub_epi32(pixel[1], pixel[0]);
+			__m128i dy = _mm_sub_epi32(pixel[3], pixel[2]);
+			__m128i dxdyArea = _mm_mul_epu32(dx, dy);
+			__m128i smallArea = _mm_cmple_epi32_soc(dxdyArea, _mm_set1_epi32(gDrawOccludeeNoRasterizationAreaThreshold));
+
+			int32_t* areaPtr = (int32_t*)&smallArea;
+			//now go to query2D mode
+			do
+			{
+				// Move index and mask to next set bit
+				uint32_t primitiveIdx = pValidIdx & 3;
+				pValidIdx >>= 2;
+
+				if (areaPtr[primitiveIdx] == -1) {
+					int32_t* pixelBounds = ((int32_t*)pixel) + primitiveIdx;
+					if (query2D<false, false>(pixelBounds[0], pixelBounds[4], pixelBounds[8], pixelBounds[12], depthBounds[primitiveIdx]))
+					{
+						occluderCache->mRasterizedOccludeeVisible = true;
+						return;
+					}
+				}
+				else {
+					largePrimitiveIdx <<= 2;
+					largePrimitiveIdx |= primitiveIdx;
+					hasLargePrimitive = true;
+				}
+			} while (pValidIdx != 0);
+
+			pValidIdx = largePrimitiveIdx;
+			if (hasLargePrimitive == false) {
+				return;
+			}
+		}
+
 		do
 		{
 			// Move index and mask to next set bit
@@ -4529,7 +4581,7 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 
 
 template <int RASTERIZE_CONFIG>
-void Rasterizer::rasterize(common::OccluderMesh& raw, OccluderRenderCache* occluderCache)
+void Rasterizer::rasterize(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache)
 {
 	constexpr bool PrimitiveDataCompressed = RASTERIZE_CONFIG & 1;
 	constexpr bool possiblyNearClipped = (bool)(RASTERIZE_CONFIG & 2);
@@ -4976,7 +5028,7 @@ void Rasterizer::rasterize(common::OccluderMesh& raw, OccluderRenderCache* occlu
 			{
 
 				//query occludee, force split to increase accuracy
-				if (bDrawOccludee && bSplitQuadToTriangleForOccludee)
+				if (bDrawOccludee && (bSplitQuadToTriangleForOccludee && !gDrawOccludeeNoRasterization))
 				{
 					if (bBackFaceCulling == true)
 					{
@@ -6172,6 +6224,55 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 					}
 				}
 			} while (pValidIdx2 != 0);
+		}
+
+		if (bDrawOccludee && gDrawOccludeeNoRasterization) {
+			int largePrimitiveIdx = 0;
+			bool hasLargePrimitive = false;
+			auto scale8 = _mm_set1_ps(8);
+			__m128i pixel[4];
+			pixel[0] = _mm_cvttps_epi32(_mm_mul_ps(minFx, scale8));
+			pixel[0] = _mm_max_epi32(pixel[0], _mm_set1_epi32(0));
+			pixel[1] = _mm_cvttps_epi32(_mm_mul_ps(maxFx, scale8));
+			pixel[1] = _mm_min_epi32(pixel[1], _mm_set1_epi32(this->m_width - 1));
+
+			pixel[2] = _mm_cvttps_epi32(_mm_mul_ps(minFy, scale8));
+			pixel[2] = _mm_max_epi32(pixel[2], _mm_set1_epi32(0));
+			pixel[3] = _mm_cvttps_epi32(_mm_mul_ps(maxFy, scale8));
+			pixel[3] = _mm_min_epi32(pixel[3], _mm_set1_epi32(this->m_height - 1));
+
+			__m128i dx = _mm_sub_epi32(pixel[1], pixel[0]);
+			__m128i dy = _mm_sub_epi32(pixel[3], pixel[2]);
+			__m128i dxdyArea = _mm_mul_epu32(dx, dy);
+			__m128i smallArea = _mm_cmple_epi32_soc(dxdyArea, _mm_set1_epi32(gDrawOccludeeNoRasterizationAreaThreshold));
+
+			int32_t* areaPtr = (int32_t*)&smallArea;
+			//now go to query2D mode
+			do
+			{
+				// Move index and mask to next set bit
+				uint32_t primitiveIdx = pValidIdx & 3;
+				pValidIdx >>= 2;
+
+				if (areaPtr[primitiveIdx] == -1) {
+					int32_t* pixelBounds = ((int32_t*)pixel) + primitiveIdx;
+					if (query2D<false, false>(pixelBounds[0], pixelBounds[4], pixelBounds[8], pixelBounds[12], depthBounds[primitiveIdx]))
+					{
+						occluderCache->mRasterizedOccludeeVisible = true;
+						return;
+					}
+				}
+				else {
+					largePrimitiveIdx <<= 2;
+					largePrimitiveIdx |= primitiveIdx;
+					hasLargePrimitive = true;
+				}
+			} while (pValidIdx != 0);
+
+			pValidIdx = largePrimitiveIdx;
+			if (hasLargePrimitive == false) {
+				return;
+			}
 		}
 
 		do
@@ -7575,40 +7676,40 @@ void Rasterizer::HandleDrawMode(__m128* x, __m128* y, __m128* z, uint32_t aliveP
 	} while (alivePrimitive != 0);
 }
 
-template void Rasterizer::rasterize<0>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
-template void Rasterizer::rasterize<1>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
-template void Rasterizer::rasterize<2>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
-template void Rasterizer::rasterize<3>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<0>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<1>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<2>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<3>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
 //template void Rasterizer::rasterize<4>(common::OccluderMesh& raw);
-template void Rasterizer::rasterize<5>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<5>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
 //template void Rasterizer::rasterize<6>(common::OccluderMesh& raw);
-template void Rasterizer::rasterize<7>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
-template void Rasterizer::rasterize<8>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
-template void Rasterizer::rasterize<9>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
-template void Rasterizer::rasterize<10>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
-template void Rasterizer::rasterize<11>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<7>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<8>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<9>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<10>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<11>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
 //template void Rasterizer::rasterize<12>(common::OccluderMesh& raw);
-template void Rasterizer::rasterize<13>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<13>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
 //template void Rasterizer::rasterize<14>(common::OccluderMesh& raw);
-template void Rasterizer::rasterize<15>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<15>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
 
 
-template void Rasterizer::rasterize<16>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
-template void Rasterizer::rasterize<17>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
-template void Rasterizer::rasterize<18>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
-template void Rasterizer::rasterize<19>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<16>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<17>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<18>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<19>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
 //template void Rasterizer::rasterize<4>(common::OccluderMesh& raw);
-template void Rasterizer::rasterize<21>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<21>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
 //template void Rasterizer::rasterize<6>(common::OccluderMesh& raw);
-template void Rasterizer::rasterize<23>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
-template void Rasterizer::rasterize<24>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
-template void Rasterizer::rasterize<25>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
-template void Rasterizer::rasterize<26>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
-template void Rasterizer::rasterize<27>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<23>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<24>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<25>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<26>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<27>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
 //template void Rasterizer::rasterize<12>(common::OccluderMesh& raw);
-template void Rasterizer::rasterize<29>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<29>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
 //template void Rasterizer::rasterize<14>(common::OccluderMesh& raw);
-template void Rasterizer::rasterize<31>(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+template void Rasterizer::rasterize<31>(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
 
 
 

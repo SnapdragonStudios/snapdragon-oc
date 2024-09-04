@@ -39,7 +39,7 @@ void* sdocInit(unsigned int width, unsigned int height, float nearPlane)
 #if defined(SDOC_STATIC)
 	LOGI("Static SDOC Version %d.%d Started", common::VERSION_MAJOR, common::VERSION_SUB);
 #else
-	LOGI("Dynamic SDOC Version %d.%d Started", common::VERSION_MAJOR, common::VERSION_SUB);
+	LOGI("Dynamic SDOC Version %d.%d Started", SDOCCommon::VERSION_MAJOR, SDOCCommon::VERSION_SUB);
 #endif
 
 	
@@ -122,14 +122,14 @@ unsigned short* sdocMeshBake( int* outputCompressSize, const float *vertices, co
 			return nullptr;
 		}
 
-		unsigned short* data = util::OccluderQuad::sdocMeshLodBake(outputCompressSize, vertices, indices, nVert, nIdx, quadAngle, enableBackfaceCull, counterClockWise, TerrainGridAxisPoint);
+		unsigned short* data = SDOCUtil::OccluderQuad::sdocMeshLodBake(outputCompressSize, vertices, indices, nVert, nIdx, quadAngle, enableBackfaceCull, counterClockWise, TerrainGridAxisPoint);
 		return data;
 }
 
 
 bool sdocMeshLod(float* vertices, unsigned short* indices, unsigned int& nVert, unsigned int& nIdx, int modelId, unsigned int targetFaceNum, bool saveModel)
 {
-	return util::OccluderQuad::sdocMeshSimplify(vertices, indices, nVert, nIdx, modelId, targetFaceNum, saveModel);
+	return SDOCUtil::OccluderQuad::sdocMeshSimplify(vertices, indices, nVert, nIdx, modelId, targetFaceNum, saveModel);
 }
 
 #else
@@ -166,7 +166,7 @@ static void CheckRecording(SOCPrivate *instance, int occluderNum)
 		}
 		for (int idx = 0; idx < occNum; idx++)
 		{
-			util::OccluderInput* occ = instance->m_rapidRasterizer->mOccluderCenter->mPool[idx];
+			SDOCUtil::OccluderInput* occ = instance->m_rapidRasterizer->mOccluderCenter->mPool[idx];
 			if (occ->IsRawMesh && occ->IsValidRawMesh == false) 
 			{
 				continue;
@@ -339,7 +339,7 @@ bool sdocSync(void * pSDOC, unsigned int id, void *param)
 			std::string output = std::string(value);
 			SOCLogger::Singleton.SetCaptureOutputPath(output);
 #if defined(SDOC_NATIVE)
-			util::OccluderQuad::SetOutputPath(output);
+			SDOCUtil::OccluderQuad::SetOutputPath(output);
 #endif
 			return true;
 		}
@@ -352,8 +352,8 @@ bool sdocSync(void * pSDOC, unsigned int id, void *param)
 		if (value != nullptr)
 		{
 			std::string output = std::string(value);
-			util::OccluderQuad::SetOutputPath(output);
-			util::OccluderQuad::SetSaveModel(1);
+			SDOCUtil::OccluderQuad::SetOutputPath(output);
+			SDOCUtil::OccluderQuad::SetSaveModel(1);
 			return true;
 		}
 		return false;
@@ -362,15 +362,15 @@ bool sdocSync(void * pSDOC, unsigned int id, void *param)
 		int* value = reinterpret_cast<int*>(param);
 		if (value != nullptr)
 		{
-			util::OccluderQuad::AllowPlanarQuadMerge(value[0] != 0);
+			SDOCUtil::OccluderQuad::AllowPlanarQuadMerge(value[0] != 0);
 			if (value[1] >= 0 && value[1] <= 2) {
-				util::OccluderQuad::SetTerrainGridOptimization(value[1]);
+				SDOCUtil::OccluderQuad::SetTerrainGridOptimization(value[1]);
 			}		
 			if (value[2] >= 80 && value[2] <= 89) {
-				util::OccluderQuad::SetTerrainRectangleAngle(value[2]);
+				SDOCUtil::OccluderQuad::SetTerrainRectangleAngle(value[2]);
 			
 			}if (value[3] >= 1 && value[3] <= 10) {
-				util::OccluderQuad::SetTerrainRectangleMergeAngle(value[3]);
+				SDOCUtil::OccluderQuad::SetTerrainRectangleMergeAngle(value[3]);
 			}
 			return true;
 		}
@@ -388,7 +388,7 @@ bool sdocSync(void * pSDOC, unsigned int id, void *param)
 			}c;
 			c.a = 1;
 			if (c.b == 1) {
-				*value = common::VERSION_MAJOR * 10 + common::VERSION_SUB;
+				*value = SDOCCommon::VERSION_MAJOR * 10 + SDOCCommon::VERSION_SUB;
 			}
 			else {
 				*value = 0; //special version to indicate it is a big endian system.
@@ -425,7 +425,7 @@ bool sdocSync(void * pSDOC, unsigned int id, void *param)
 	else if (id == SDOC_Get_DepthMap)
 	{
 		unsigned char* data = (unsigned char*)param;
-		return instance->doDumpDepthMap(data, common::DumpImageMode::DumpFull);
+		return instance->doDumpDepthMap(data, SDOCCommon::DumpImageMode::DumpFull);
 	}
 	else if (id == SDOC_Set_CoherentModeSmallRotateDotAngleThreshold)
 	{
@@ -474,12 +474,12 @@ bool sdocSync(void * pSDOC, unsigned int id, void *param)
 #if defined(SDOC_NATIVE)
 	else if (id == SDOC_Get_BakeData_QuadTriangleNum) {
 		uint16_t* value = reinterpret_cast<uint16_t*>(param);
-		util::OccluderQuad::Get_BakeData_QuadTriangleNum(value);
+		SDOCUtil::OccluderQuad::Get_BakeData_QuadTriangleNum(value);
 	}
 
 	else if (id == SDOC_Set_UseMaxDepthToQueryOccludeeMesh) {
 		uint16_t* bakeData = reinterpret_cast<uint16_t*>(param);
-		util::OccluderQuad::EnableMaxDepthToQueryOccludeeMesh(bakeData);
+		SDOCUtil::OccluderQuad::EnableMaxDepthToQueryOccludeeMesh(bakeData);
 	}
 #endif
 

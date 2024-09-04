@@ -63,7 +63,7 @@ bool SOCLogger::GetLog(char* output)
 	return true;
 }
 
-namespace common
+namespace SDOCCommon
 {
     void SOCFrameInfo::startNewFrame()
 	{
@@ -241,14 +241,14 @@ namespace common
 
 			uint16_t *meta = (uint16_t *)vertices;
 
-			common::OccluderMesh raw;
+			SDOCCommon::OccluderMesh raw;
 			raw.QuadSafeBatchNum = meta[2]; 
 			raw.TriangleBatchIdxNum =meta[3]; 
 
 			
 			int idxNum = raw.QuadSafeBatchNum * 16 + raw.TriangleBatchIdxNum * 12;
 			int vertNum = meta[1];
-			if (vertNum <= common::SuperCompressVertNum)
+			if (vertNum <= SDOCCommon::SuperCompressVertNum)
 			{
 				idxNum >>= 1;
 			}

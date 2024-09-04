@@ -33,7 +33,7 @@
 #include "SOCUtil.h"
 #include <unordered_map>
 #endif
-namespace util
+namespace SDOCUtil
 {
 	//***************************************
 	//Mesh Baking Process
@@ -524,20 +524,20 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 	void OccluderBakeBuffer::RequestFaceBySize(uint32_t size)
 	{
 		if (size == 0) return;
-		mFaces = new util::MeshFace[size];
+		mFaces = new SDOCUtil::MeshFace[size];
 	}
 
 	void OccluderBakeBuffer::RequestQuadBySize(uint32_t size)
 	{
 		if (size == 0) return;
-		mQuads = new util::MeshQuad[size];
-		memset(mQuads, 0, size * sizeof(util::MeshQuad));		
+		mQuads = new SDOCUtil::MeshQuad[size];
+		memset(mQuads, 0, size * sizeof(SDOCUtil::MeshQuad));		
 	}
 
 	void OccluderBakeBuffer::RequestVertexBySize(uint32_t size)
 	{
 		if (size == 0) return;
-		mVertices = new util::MeshVertex[size];
+		mVertices = new SDOCUtil::MeshVertex[size];
 		for (uint32_t idx = 0; idx < size; idx++)
 		{
 			mVertices[idx].VertID = idx;
@@ -704,7 +704,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 
 		uint32_t nVert = static_cast<uint32_t>(vertNum);
 		pBakeBuffer->RequestVertexBySize(nVert);
-		util::MeshVertex* Vertices = pBakeBuffer->mVertices;
+		SDOCUtil::MeshVertex* Vertices = pBakeBuffer->mVertices;
 		
 
 		pBakeBuffer->RequestFaceBySize(nTri);
@@ -1820,7 +1820,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 				{
 					for (int qidx = 0; qidx < 4; qidx++) {
 						uint16_t vIdx = mq->vIdx[qidx];
-						util::MeshVertex& vert = Vertices[vIdx];
+						SDOCUtil::MeshVertex& vert = Vertices[vIdx];
 						vert.QuadIndices <<= 16;
 						vert.QuadIndices |= loopIdx + 1; //store max four Quad Idx (+1) for vert
 					}
@@ -1834,7 +1834,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 				if (face->ValidSingleTriangle)
 				{
 					for (int vidx = 0; vidx < 3; vidx++) {
-						util::MeshVertex& vert = Vertices[face->nVertIdx[vidx]];
+						SDOCUtil::MeshVertex& vert = Vertices[face->nVertIdx[vidx]];
 						uint64_t quadInfo = vert.QuadIndices;
 						while (quadInfo > 0) {
 							uint16_t vertexQuadIdx = (quadInfo & 65535);
@@ -2061,7 +2061,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 	}
 
 
-	bool OccluderQuad::MergeQuad(MeshQuad * q0, MeshQuad * q1, __m128* points, util::MeshVertex* Vertices, bool isTerrain, int &totalMerged, float lineLinkTH, bool allowDiffKidMerge)
+	bool OccluderQuad::MergeQuad(MeshQuad * q0, MeshQuad * q1, __m128* points, SDOCUtil::MeshVertex* Vertices, bool isTerrain, int &totalMerged, float lineLinkTH, bool allowDiffKidMerge)
 	{
 		if (q1->QuadKids == 0 || q0->QuadKids == 0)
 		{
@@ -2113,7 +2113,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 		}
 		return false;
 	}
-	bool MeshQuad::MergeWith(MeshQuad * q, float sameFaceTh, __m128 * vertices, util::MeshVertex* MeshVertices, bool isTerrain, int &TotalMerged, float lineTh)
+	bool MeshQuad::MergeWith(MeshQuad * q, float sameFaceTh, __m128 * vertices, SDOCUtil::MeshVertex* MeshVertices, bool isTerrain, int &TotalMerged, float lineTh)
 	{
 		float t1 = dotSum3(this->face1->UnitNormal, q->face1->UnitNormal);
 		float th = QuadTwoSameFaceTh;
@@ -2318,7 +2318,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 		gTerrainGridOptimization = value;
 	}
 
-	void OccluderQuad::SetRectangleDegreeToZero(util::MeshVertex* Vertices, uint32_t nVert)
+	void OccluderQuad::SetRectangleDegreeToZero(SDOCUtil::MeshVertex* Vertices, uint32_t nVert)
 	{
 		uint32_t nVert4 = (nVert >> 2) << 2;
 		//group by 4 to reduce branch check
@@ -2387,7 +2387,12 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 		return true;
 	}
 
-
+	//Extract Quad/Triangle batch number from bakedata, QuadSafeBatchNum, TriangleBatchIdxNum to store results
+	void OccluderQuad::Get_BakeData_QuadTriangleNum(uint16_t* BakedOccluderData, uint16_t* QuadSafeBatchNum, uint16_t* TriangleBatchIdxNum)
+	{
+		*QuadSafeBatchNum = BakedOccluderData[2];
+		*TriangleBatchIdxNum = BakedOccluderData[3];
+	}
 	void OccluderQuad::Get_BakeData_QuadTriangleNum(uint16_t* value)
 	{
 		value[0] = value[4] * 4;
@@ -2408,17 +2413,17 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 			return nullptr;
 		}
 
-		util::OccluderBakeBuffer* pBakeBuffer = new util::OccluderBakeBuffer();
+		SDOCUtil::OccluderBakeBuffer* pBakeBuffer = new SDOCUtil::OccluderBakeBuffer();
 		//************************************************************************
 		//decompose to quad
 		//************************************************************************
-		util::QuadTriIndex quadData;
-		util::OccluderQuad::decomposeToQuad(pBakeBuffer, indices, nIdx, vertices, nVert, quadData, quadAngle, nullptr, false, TerrainGridAxisPoint);
+		SDOCUtil::QuadTriIndex quadData;
+		SDOCUtil::OccluderQuad::decomposeToQuad(pBakeBuffer, indices, nIdx, vertices, nVert, quadData, quadAngle, nullptr, false, TerrainGridAxisPoint);
 		if (pBakeBuffer->mRequest != nullptr) { //one more round of baking
-			util::BakeRequest* request = pBakeBuffer->mRequest;
-			util::OccluderBakeBuffer* pBakeBuffer2 = new util::OccluderBakeBuffer();
+			SDOCUtil::BakeRequest* request = pBakeBuffer->mRequest;
+			SDOCUtil::OccluderBakeBuffer* pBakeBuffer2 = new SDOCUtil::OccluderBakeBuffer();
 			pBakeBuffer2->mParent = pBakeBuffer;
-			util::OccluderQuad::decomposeToQuad(pBakeBuffer2, request->indices, request->nIdx, request->vertices, request->nVert, quadData, quadAngle, nullptr, false, TerrainGridAxisPoint);
+			SDOCUtil::OccluderQuad::decomposeToQuad(pBakeBuffer2, request->indices, request->nIdx, request->vertices, request->nVert, quadData, quadAngle, nullptr, false, TerrainGridAxisPoint);
 			pBakeBuffer = pBakeBuffer2;
 		}
 
@@ -2484,7 +2489,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 			int piIdx = 0;
 			const uint16_t* pIndexCurrent = quadData.indices;
 			if (pIndexCurrent == nullptr) pIndexCurrent = indices;
-			if (quadData.nActiveVerts <= common::SuperCompressVertNum)
+			if (quadData.nActiveVerts <= SDOCCommon::SuperCompressVertNum)
 			{
 				uint8_t * pi8 = (uint8_t*)pVertices;
 
@@ -2597,12 +2602,12 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 		{
 			std::string savedFile = std::to_string(modelId) + std::string("_Input.OFF");
 			LOGI("save: %s", (SOCLogger::GetOutputDirectory() + savedFile).c_str());
-			util::OccluderQuad::storeModel(SOCLogger::GetOutputDirectory() + savedFile, vertices, nVert, indices, nIdx);
+			SDOCUtil::OccluderQuad::storeModel(SOCLogger::GetOutputDirectory() + savedFile, vertices, nVert, indices, nIdx);
 		}
 
 		int reducedFaceNum = 0;
 		int reducedVertNum = 0;
-		bool bValid = common::MeshReducer::reduce(vertices, indices, nVert, nIdx,
+		bool bValid = SDOCCommon::MeshReducer::reduce(vertices, indices, nVert, nIdx,
 			vertices, reducedVertNum, indices, reducedFaceNum, targetFaceNum);
 
 		if (bValid)
@@ -2613,13 +2618,13 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 			{
 				std::string savedFile = std::to_string(modelId) + std::string("_LOD.OFF");
 				LOGI("save: %s", (SOCLogger::GetOutputDirectory() + savedFile).c_str());
-				util::OccluderQuad::storeModel(SOCLogger::GetOutputDirectory() + savedFile, vertices, nVert, indices, nIdx);
+				SDOCUtil::OccluderQuad::storeModel(SOCLogger::GetOutputDirectory() + savedFile, vertices, nVert, indices, nIdx);
 			}
 		}
 		return bValid;
 	}
 
-	bool OccluderQuad::MergeTriangleIntoQuad(MeshFace* face, MeshQuad* mq, util::MeshVertex& vert, __m128* points, util::MeshVertex* vertices)
+	bool OccluderQuad::MergeTriangleIntoQuad(MeshFace* face, MeshQuad* mq, SDOCUtil::MeshVertex& vert, __m128* points, SDOCUtil::MeshVertex* vertices)
 	{
 		if (mq->IsPlanarQuad == false) return false;
 		float t1 = dotSum3(face->UnitNormal, mq->face1->UnitNormal);
@@ -2661,7 +2666,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 							}
 							uint16_t backup = mq->vIdx[targetIdx];
 							mq->vIdx[targetIdx] = pivotIdx;
-							util::MeshVertex& mv = vertices[backup];
+							SDOCUtil::MeshVertex& mv = vertices[backup];
 							mv.RemoveQuad(mq->qIdx);
 							face->ValidSingleTriangle = false;
 							mq->quad_area += face->area;
@@ -2703,11 +2708,11 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 			if (bValid)
 			{
 				std::cout << "Simplified from " << nIdx / 3 << "  " << reducedIdxNum << std::endl;
-				unsigned short* data = util::OccluderQuad::sdocMeshBake(outputCompressSize, vp.data(), vi.data(), reducedVertNum, reducedIdxNum, quadAngle, enableBackfaceCull, counterClockWise, TerrainGridAxisPoint);
+				unsigned short* data = SDOCUtil::OccluderQuad::sdocMeshBake(outputCompressSize, vp.data(), vi.data(), reducedVertNum, reducedIdxNum, quadAngle, enableBackfaceCull, counterClockWise, TerrainGridAxisPoint);
 				return data;
 			}
 		}
-		return util::OccluderQuad::sdocMeshBake(outputCompressSize, vertices, indices, nVert, nIdx, quadAngle, enableBackfaceCull, counterClockWise, TerrainGridAxisPoint);
+		return SDOCUtil::OccluderQuad::sdocMeshBake(outputCompressSize, vertices, indices, nVert, nIdx, quadAngle, enableBackfaceCull, counterClockWise, TerrainGridAxisPoint);
 
 	}
 
@@ -2722,7 +2727,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 			return true;
 		return false;
 	}
-	int OccluderQuad::getAABBMode(util::QuadTriIndex &quadData, const uint16_t* pIndexCurrent)
+	int OccluderQuad::getAABBMode(SDOCUtil::QuadTriIndex &quadData, const uint16_t* pIndexCurrent)
 	{
 		bool print = false;
 		if (print) {

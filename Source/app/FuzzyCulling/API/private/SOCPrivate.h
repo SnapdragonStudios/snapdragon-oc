@@ -15,7 +15,7 @@
 #include "Util/RapidRasterizer/RapidRasterizer.h"
 #include "Util/RapidRasterizer/OccluderQuad.h"
 
-namespace common
+namespace SDOCCommon
 {
 class SOCFrameInfo;
 } // namespace common
@@ -49,7 +49,7 @@ public:
 
 
     // dump depth map
-	bool doDumpDepthMap(unsigned char *data, common::DumpImageMode mode);
+	bool doDumpDepthMap(unsigned char *data, SDOCCommon::DumpImageMode mode);
 
 #if defined(SDOC_NATIVE_DEBUG)&& defined(SDOC_NATIVE)
     // replay
@@ -57,7 +57,7 @@ public:
 #endif
 
     // set approach
-    void setAlgoApproach(common::AlgoEnum config);
+    void setAlgoApproach(SDOCCommon::AlgoEnum config);
 
 
 
@@ -68,12 +68,12 @@ public:
 	float LargeRotateDotAngleThreshold = 0.9962f; // rotating 5 degree
 
 	float CameraNearDistanceThreshold = -1;
-	common::AlgoEnum algoApproachMask = common::AlgoEnum::Rasterizer_FullTriangle;
+	SDOCCommon::AlgoEnum algoApproachMask = SDOCCommon::AlgoEnum::Rasterizer_FullTriangle;
 
 	bool mResolutionChanged = false;
 	uint16_t mRapidCoherentMode = 0;
 	// SOC frame info
-	common::SOCFrameInfo* m_frameInfo = nullptr;
+	SDOCCommon::SOCFrameInfo* m_frameInfo = nullptr;
 
 protected:
 
@@ -84,7 +84,7 @@ public:
 
 	SOCPrivate();
 	~SOCPrivate();
-	util::RapidRasterizer* m_rapidRasterizer;
+	SDOCUtil::RapidRasterizer* m_rapidRasterizer;
 
 	bool saveColorImage(unsigned char * fullImgData, const char* path);
 

@@ -168,7 +168,7 @@ enum SDOCDebug
 	QuadProcessed = 152,
 
 };
-namespace util
+namespace SDOCUtil
 {
 
 
@@ -355,7 +355,7 @@ public:
 
     void setResolution(unsigned int width, unsigned int height);
 
-	void setModelViewProjectionT(const common::Matrix4x4 &localToClip, bool simpleOccludee, OccluderRenderCache* occ);
+	void setModelViewProjectionT(const SDOCCommon::Matrix4x4 &localToClip, bool simpleOccludee, OccluderRenderCache* occ);
 
     void configBeforeRasterization();
 
@@ -370,14 +370,14 @@ public:
 	bool queryVisibility_QUAD(const float* minmaxf);
 
 
-	void doRasterize(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+	void doRasterize(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
 
 
 	template <bool bQueryOccluder, bool bOccludeeWidth1024>
     bool query2D(uint32_t minX, uint32_t maxX, uint32_t minY, uint32_t maxY, uint16_t maxZ);
 
 	// Currently unused
-    bool readBackDepth(unsigned char* target, common::DumpImageMode mode);
+    bool readBackDepth(unsigned char* target, SDOCCommon::DumpImageMode mode);
 
 
 	template <bool bHasTreeData, bool OccludeeWidth1024>
@@ -423,12 +423,12 @@ public:
 	__m128 m_OccludeelocalToClip[10];  //first 4 local to clip, second 6 frustum plane m_OccludeeFrustumPlane[6];
 private:
 
-	uint64_t applyToneMapping(__m128i a, common::DumpImageMode mode);
+	uint64_t applyToneMapping(__m128i a, SDOCCommon::DumpImageMode mode);
 	template <bool bPixelAABBClippingQuad, bool bDrawOccludee>
 	void drawQuad(__m128 * x, __m128 * y, __m128 * invW, __m128 * W,  __m128 primitiveValid, __m128* edgeNormalsX, __m128* edgeNormalsY, __m128* areas, OccluderRenderCache* occluderCache);
 
 	template <int RASTERIZE_CONFIG>
-	void rasterize(common::OccluderMesh& raw, OccluderRenderCache* occluderCache);
+	void rasterize(SDOCCommon::OccluderMesh& raw, OccluderRenderCache* occluderCache);
 
     inline void precomputeRasterizationTable();
 

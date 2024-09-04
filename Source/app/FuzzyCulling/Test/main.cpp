@@ -16,8 +16,8 @@
 #include "SDOCReplayer.h"
 //#include <Windows.h>
 
-using namespace common;
-using namespace util;
+using namespace SDOCCommon;
+using namespace SDOCUtil;
 
 
 
@@ -34,15 +34,15 @@ const char * getTextForEnum(int enumVal)
 	switch (enumVal)
 	{
 
-	case  common::AlgoEnum::Rasterizer_FullTriangle: return "Rasterizer_FullTriangle";
+	case  SDOCCommon::AlgoEnum::Rasterizer_FullTriangle: return "Rasterizer_FullTriangle";
 		
 
 #ifdef SDOC_NATIVE_DEBUG
 
-	case  common::AlgoEnum::Rasterizer_FullTriangle2: return "Rasterizer_FullTriangle2";
-	case  common::AlgoEnum::Rasterizer_FullTriangle3: return "Rasterizer_FullTriangle3";
-	case  common::AlgoEnum::Rasterizer_FullTriangle4: return "Rasterizer_FullTriangle4";
-	case  common::AlgoEnum::Rasterizer_FullTriangle5: return "Rasterizer_FullTriangle5";
+	case  SDOCCommon::AlgoEnum::Rasterizer_FullTriangle2: return "Rasterizer_FullTriangle2";
+	case  SDOCCommon::AlgoEnum::Rasterizer_FullTriangle3: return "Rasterizer_FullTriangle3";
+	case  SDOCCommon::AlgoEnum::Rasterizer_FullTriangle4: return "Rasterizer_FullTriangle4";
+	case  SDOCCommon::AlgoEnum::Rasterizer_FullTriangle5: return "Rasterizer_FullTriangle5";
 
 #endif
 	default:

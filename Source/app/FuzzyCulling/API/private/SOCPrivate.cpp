@@ -34,7 +34,7 @@ using namespace std;
 #pragma warning( disable : 4996  )
 #endif
 
-using namespace common;
+using namespace SDOCCommon;
 namespace
 {
 
@@ -210,8 +210,8 @@ void SOCPrivate::setNearPlane(float nearPlane)
 
 void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, const float *ViewProj)
 {
-	common::Vec3f ViewDirV = common::Vec3f(ViewDir[0], ViewDir[1], ViewDir[2]);
-	common::Vec3f lastDir = m_frameInfo->mCameraViewDir;
+	SDOCCommon::Vec3f ViewDirV = SDOCCommon::Vec3f(ViewDir[0], ViewDir[1], ViewDir[2]);
+	SDOCCommon::Vec3f lastDir = m_frameInfo->mCameraViewDir;
 	m_frameInfo->mCameraViewDir = ViewDirV.normalize();
 	float viewDot = lastDir.dot(m_frameInfo->mCameraViewDir);
 	bool IsRotating = viewDot < this->SmallRotateDotAngleThreshold;
@@ -221,7 +221,7 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 
 
     // cache the camera position and view-projection matrix
-	float cameraPosSquareDis = common::FloatArray::calculateSquareDistance3(m_frameInfo->CameraPos, CameraPos);
+	float cameraPosSquareDis = SDOCCommon::FloatArray::calculateSquareDistance3(m_frameInfo->CameraPos, CameraPos);
 
 	bool IsCameraDistanceNear = true;
 	if(this->CameraNearDistanceThreshold > 0)
@@ -236,7 +236,7 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 	bool sameVP = false;
 	if (cameraPosSquareDis == 0) 
 	{
-		sameVP = common::FloatArray::containSameData16(m_frameInfo->ViewProjArray, ViewProj);
+		sameVP = SDOCCommon::FloatArray::containSameData16(m_frameInfo->ViewProjArray, ViewProj);
 	}
     if (sameVP == false) 
 	{
@@ -402,9 +402,9 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 	SOCPrivate::SOCPrivate() 
 	{
 		// frame info
-		m_frameInfo = new common::SOCFrameInfo();
+		m_frameInfo = new SDOCCommon::SOCFrameInfo();
         // create rapid rasterizer
-        m_rapidRasterizer = new util::RapidRasterizer();
+        m_rapidRasterizer = new SDOCUtil::RapidRasterizer();
 
 
 
@@ -414,7 +414,7 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 
     	memset(m_frameInfo->CameraPos, 0, 3 * sizeof(float));
 
-        setAlgoApproach(common::AlgoEnum::Rasterizer_FullTriangle);
+        setAlgoApproach(SDOCCommon::AlgoEnum::Rasterizer_FullTriangle);
 	
 
 		this->configPerformanceMode(SDOC_RenderMode_CoherentFast);
@@ -457,7 +457,7 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 
 			void CompressModel()
 			{
-				util::OccluderQuad::ConfigDebugOccluder(occluderID, CompactData);
+				SDOCUtil::OccluderQuad::ConfigDebugOccluder(occluderID, CompactData);
 				if (CompactData != nullptr) return;
 
 				int outputCompressSize = 0;
@@ -467,7 +467,7 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 				if (CompactData != nullptr) {
 					uint16_t queryQuadTriangle[6];
 					memcpy(queryQuadTriangle + 2, CompactData, 4 * sizeof(uint16_t));
-					util::OccluderQuad::Get_BakeData_QuadTriangleNum(queryQuadTriangle);
+					SDOCUtil::OccluderQuad::Get_BakeData_QuadTriangleNum(queryQuadTriangle);
 
 					//std::cout << "Baked Quad " << queryQuadTriangle[0] << " Triangle " << queryQuadTriangle[1] << " From original triangle " << (nIdx / 3) << std::endl;
 				}
@@ -900,7 +900,7 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 
 		LOGI( "Width %d Height %d",  loader->Width, loader->Height);
 
-		this->setAlgoApproach((common::AlgoEnum) config);
+		this->setAlgoApproach((SDOCCommon::AlgoEnum) config);
 
 		
 		bool dumpPerDraw = (replaySetting & 8) > 0;
@@ -1123,7 +1123,7 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 					continue;
 				}
 
-				doDumpDepthMap(image, common::DumpImageMode::DumpFull);
+				doDumpDepthMap(image, SDOCCommon::DumpImageMode::DumpFull);
 				std::string inputFile = std::string(file_path);
 				std::string result = inputFile.substr(0, inputFile.length() - 4) + "_" + std::to_string(config)+"_" +std::to_string(loopCount) + ".ppm";
 				dumpOccluderOccludeeColorImage(result, image, width, height);
@@ -1177,7 +1177,7 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 
 		//if(false)
 		{
-			doDumpDepthMap(blockMasks, common::DumpImageMode::DumpBlockMask);
+			doDumpDepthMap(blockMasks, SDOCCommon::DumpImageMode::DumpBlockMask);
 			dumpGrayImage(folderName + "depth" + std::to_string(config) + "_BlockMask.pgm", blockMasks, 512, 1024);
 			std::cout << "******************** " + folderName + "depth" + std::to_string(config) + "_BlockMask.pgm" << std::endl;
 		}
@@ -1191,12 +1191,12 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 
 
 		{
-			doDumpDepthMap(image, common::DumpImageMode::DumpFullMax);
+			doDumpDepthMap(image, SDOCCommon::DumpImageMode::DumpFullMax);
 			std::string result = inputFile.substr(0, inputFile.length()-4) + "_" + std::to_string(config)+"_r"+ std::to_string(roundNum)+ "Max.ppm";
 			dumpOccluderOccludeeColorImage(result, image, width, height);
 
 
-			doDumpDepthMap(image, common::DumpImageMode::DumpFullMin);
+			doDumpDepthMap(image, SDOCCommon::DumpImageMode::DumpFullMin);
 			 result = inputFile.substr(0, inputFile.length() - 4) + "_" + std::to_string(config) + "_r" + std::to_string(roundNum) + "Min.ppm";
 			dumpOccluderOccludeeColorImage(result, image, width, height);
 
@@ -1207,23 +1207,23 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 				int w = 256;
 				uint8_t *cbi = new uint8_t[w * w];
 
-				doDumpDepthMap(cbi, common::DumpImageMode::CheckerBoard_blackPattern);
+				doDumpDepthMap(cbi, SDOCCommon::DumpImageMode::CheckerBoard_blackPattern);
 				dumpGrayImage(folderName + "CheckerBoard_blackPattern.pgm", cbi, w, w);
-				doDumpDepthMap(cbi, common::DumpImageMode::CheckerBoard_whitePattern);
+				doDumpDepthMap(cbi, SDOCCommon::DumpImageMode::CheckerBoard_whitePattern);
 				dumpGrayImage(folderName + "CheckerBoard_whitePattern.pgm", cbi, w, w);
-				doDumpDepthMap(cbi, common::DumpImageMode::CheckerBoard_oddColumn);
+				doDumpDepthMap(cbi, SDOCCommon::DumpImageMode::CheckerBoard_oddColumn);
 				dumpGrayImage(folderName + "CheckerBoard_oddColumn.pgm", cbi, w, w);
-				doDumpDepthMap(cbi, common::DumpImageMode::CheckerBoard_evenColumn);
+				doDumpDepthMap(cbi, SDOCCommon::DumpImageMode::CheckerBoard_evenColumn);
 				dumpGrayImage(folderName + "CheckerBoard_evenColumn.pgm", cbi, w, w);
 
 
-				doDumpDepthMap(cbi, common::DumpImageMode::CheckerBoard_oddBlack);
+				doDumpDepthMap(cbi, SDOCCommon::DumpImageMode::CheckerBoard_oddBlack);
 				dumpGrayImage(folderName + "CheckerBoard_oddBlack.pgm", cbi, w, w);
-				doDumpDepthMap(cbi, common::DumpImageMode::CheckerBoard_evenBlack);
+				doDumpDepthMap(cbi, SDOCCommon::DumpImageMode::CheckerBoard_evenBlack);
 				dumpGrayImage(folderName + "CheckerBoard_evenBlack.pgm", cbi, w, w);
-				doDumpDepthMap(cbi, common::DumpImageMode::CheckerBoard_evenWhite);
+				doDumpDepthMap(cbi, SDOCCommon::DumpImageMode::CheckerBoard_evenWhite);
 				dumpGrayImage(folderName + "CheckerBoard_evenWhite.pgm", cbi, w, w);
-				doDumpDepthMap(cbi, common::DumpImageMode::CheckerBoard_oddWhite);
+				doDumpDepthMap(cbi, SDOCCommon::DumpImageMode::CheckerBoard_oddWhite);
 				dumpGrayImage(folderName + "CheckerBoard_oddWhite.pgm", cbi, w, w);
 
 				delete[]cbi;
@@ -1236,13 +1236,13 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 		LOGI("%d x %d", width, height);
 		//image = new unsigned char[m_depthWidth * m_depthHeight / 8 / 8]; // clear
 		if (false) {
-			for (int idx = common::DumpImageMode::DumpHiz;
-				idx <= common::DumpImageMode::DumpBlockMask; idx++)
+			for (int idx = SDOCCommon::DumpImageMode::DumpHiz;
+				idx <= SDOCCommon::DumpImageMode::DumpBlockMask; idx++)
 			{
 
-				doDumpDepthMap(image, (common::DumpImageMode) idx);
+				doDumpDepthMap(image, (SDOCCommon::DumpImageMode) idx);
 
-				if (idx == common::DumpImageMode::DumpHiz)
+				if (idx == SDOCCommon::DumpImageMode::DumpHiz)
 				{
 					dumpGrayImage(folderName + "depth" + std::to_string(config) + "Hiz.pgm", image, width / 8, height / 8);
 				}
@@ -1272,7 +1272,7 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 
     }
 
-    void SOCPrivate::setAlgoApproach(common::AlgoEnum config)
+    void SOCPrivate::setAlgoApproach(SDOCCommon::AlgoEnum config)
     {
 		this->algoApproachMask = config;
     }
@@ -1293,7 +1293,7 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 		return true;
 	}
 
-	bool SOCPrivate::doDumpDepthMap(unsigned char *data, common::DumpImageMode mode)
+	bool SOCPrivate::doDumpDepthMap(unsigned char *data, SDOCCommon::DumpImageMode mode)
     {
         if (!data)
         {
@@ -1341,7 +1341,7 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 
 		size_t s = m_rapidRasterizer->getMemoryByteUsed();
 		//s = std::max<size_t>(minMemory, s);
-		s += sizeof(SOCPrivate) + sizeof(common::SOCFrameInfo);
+		s += sizeof(SOCPrivate) + sizeof(SDOCCommon::SOCFrameInfo);
 		return s;
 	}
 

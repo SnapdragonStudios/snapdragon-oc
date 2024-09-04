@@ -2288,6 +2288,18 @@ inline __m128 _mm_blendv_ps(const __m128 &a, const __m128 &b, const __m128 &mask
     return vbslq_f32(mask, b, a);
 }
 
+// Multiply the low unsigned 32-bit integers from each packed 64-bit element in
+// a and b, and store the unsigned 64-bit results in dst.
+//
+//   r0 :=  (a0 & 0xFFFFFFFF) * (b0 & 0xFFFFFFFF)
+//   r1 :=  (a2 & 0xFFFFFFFF) * (b2 & 0xFFFFFFFF)
+inline __m128i _mm_mul_epu32(__m128i a, __m128i b)
+{
+// vmull_u32 upcasts instead of masking, so we downcast.
+uint32x2_t a_lo = vmovn_u64(vreinterpretq_u64_m128i(a));
+uint32x2_t b_lo = vmovn_u64(vreinterpretq_u64_m128i(b));
+return vreinterpretq_m128i_u64(vmull_u32(a_lo, b_lo));
+}
 
 
 inline __m128i _mm_unpacklo_epi8_soc(uint64_t b)

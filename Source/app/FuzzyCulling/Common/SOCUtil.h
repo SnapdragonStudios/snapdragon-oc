@@ -142,7 +142,7 @@ static void LOGI(const char* format, ...)
 	{
 #ifdef __ANDROID__
 		LOGI_Android("%s", message);
-#elif SDOC_IOS
+#elif defined(SDOC_IOS)
         SOCLogger::Singleton.AddLog(std::string(message));
 #else
 		std::cout << message << std::endl;
@@ -161,12 +161,12 @@ static inline void socAssert(bool b)
 	}
 #endif
 }
-namespace util
+namespace SDOCUtil
 {
 	class RapidRasterizer;
 } // namespace util
 
-namespace common
+namespace SDOCCommon
 {
 
 
@@ -248,7 +248,7 @@ public:
 	uint64_t FrameCounter = START_FRAME_COUNT; //start from frame 2
 
 
-	common::Vec3f mCameraViewDir;
+	SDOCCommon::Vec3f mCameraViewDir;
 	// Camera Position
 	float CameraPos[3];
 
@@ -261,7 +261,7 @@ public:
 	SOCFrameInfo();
 
 
-	util::RapidRasterizer* m_rapidRasterizer;
+	SDOCUtil::RapidRasterizer* m_rapidRasterizer;
 
 	void StopFrameCapture();
 	std::string mOutputSaveCap="";
