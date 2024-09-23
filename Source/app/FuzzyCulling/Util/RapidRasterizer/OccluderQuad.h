@@ -318,6 +318,10 @@ namespace SDOCUtil
 
 	};
 
+	//Quad-triangle Post-process feature requested by developers
+	//after triangle merging to quads, developers could try to implement 'their own algorithm' to sort related quad/triangle to form 
+	//group base on normal. It is preferred to pack similar normal primitives(quad/triangles) together
+	typedef void (*PFPostQuadMergeCallback)(QuadTriIndex* MergedQuadTriInfo);
 
 	class OccluderQuad {
 	public:
@@ -348,12 +352,12 @@ namespace SDOCUtil
 		static void SetSaveModel(bool saveModel);
 		static void SetOutputPath(std::string output);
 
-		static unsigned short* sdocMeshLodBake(int* outputCompressSize, const float* vertices, const unsigned short* indices, unsigned int nVert, unsigned int nIdx, float quadAngle, bool enableBackfaceCull, bool counterClockWise, int TerrainGridAxisPoint);
+		static unsigned short* sdocMeshLodBake(int* outputCompressSize, const float* vertices, const unsigned short* indices, unsigned int nVert, unsigned int nIdx, float quadAngle, bool enableBackfaceCull, bool counterClockWise, int TerrainGridAxisPoint, PFPostQuadMergeCallback PostQuadMergeCallback = nullptr);
 		static bool storeModel(const std::string& file_path,
 			const float* vertices, int nVert,
 			const uint16_t* indices, int indicesNum);
 	private:
-		static unsigned short* sdocMeshBake(int* outputCompressSize, const float* vertices, const unsigned short* indices, unsigned int nVert, unsigned int nIdx, float quadAngle, bool enableBackfaceCull, bool counterClockWise, int TerrainGridAxisPoint);
+		static unsigned short* sdocMeshBake(int* outputCompressSize, const float* vertices, const unsigned short* indices, unsigned int nVert, unsigned int nIdx, float quadAngle, bool enableBackfaceCull, bool counterClockWise, int TerrainGridAxisPoint, PFPostQuadMergeCallback PostQuadMergeCallback);
 
 		static bool MergeQuad(MeshQuad* q0, MeshQuad* q1, __m128* points, SDOCUtil::MeshVertex* Vertices, bool isTerrain, int& totalMerged, float lineLinkTH, bool allowDiffKidMerge);
 		static void ConfigControlParameters(bool isTerrain);

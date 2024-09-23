@@ -167,6 +167,11 @@ enum SDOCDebug
 	QuadToTriangleSplit = 151,
 	QuadProcessed = 152,
 
+	OccludeeRasterizeQuery2D = 200,
+	OccludeeRasterizeQuad = 201,            //rasterized occludee quad
+	OccludeeRasterizeQuadBlocks = 202,      //rasterized occludee quad
+	OccludeeRasterizeTriangle = 203,        //rasterized occludee triangle
+	OccludeeRasterizeTriangleBlocks = 204,  //rasterized occludee triangle
 };
 namespace SDOCUtil
 {

@@ -2406,7 +2406,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 	}
 	//due to usage of singleton and global shared result buffer, this function is not thread-safe
 	//developer should add mutex lock at high level to make sdocMeshBake and result retrieving exclusive
-	unsigned short* OccluderQuad::sdocMeshBake(int* outputCompressSize, const float *vertices, const unsigned short *indices, unsigned int nVert, unsigned int nIdx, float quadAngle, bool enableBackfaceCull, bool counterClockWise, int TerrainGridAxisPoint)
+	unsigned short* OccluderQuad::sdocMeshBake(int* outputCompressSize, const float *vertices, const unsigned short *indices, unsigned int nVert, unsigned int nIdx, float quadAngle, bool enableBackfaceCull, bool counterClockWise, int TerrainGridAxisPoint, PFPostQuadMergeCallback PostQuadMergeCallback)
 	{
 		//TestModel();
 		if (isInputModelValid(indices, nVert, nIdx) == false) {
@@ -2425,6 +2425,13 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 			pBakeBuffer2->mParent = pBakeBuffer;
 			SDOCUtil::OccluderQuad::decomposeToQuad(pBakeBuffer2, request->indices, request->nIdx, request->vertices, request->nVert, quadData, quadAngle, nullptr, false, TerrainGridAxisPoint);
 			pBakeBuffer = pBakeBuffer2;
+		}
+
+		//after triangle merging to quads, developer could try to sort related quad/triangle to form 
+		//group base on normal. It is preferred to pack similar normal primitives(quad/triangles) together
+		if (PostQuadMergeCallback != nullptr)
+		{
+			PostQuadMergeCallback(&quadData);
 		}
 
 		vertices = (float*)quadData.verts;
@@ -2684,7 +2691,7 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 	}
 
 	static int mModelID = 10000;
-		unsigned short* OccluderQuad::sdocMeshLodBake(int* outputCompressSize, const float* vertices, const unsigned short* indices, unsigned int nVert, unsigned int nIdx, float quadAngle, bool enableBackfaceCull, bool counterClockWise, int TerrainGridAxisPoint)
+		unsigned short* OccluderQuad::sdocMeshLodBake(int* outputCompressSize, const float* vertices, const unsigned short* indices, unsigned int nVert, unsigned int nIdx, float quadAngle, bool enableBackfaceCull, bool counterClockWise, int TerrainGridAxisPoint, PFPostQuadMergeCallback PostQuadMergeCallback)
 	{
 
 		bool simplifyMesh = false;
@@ -2708,11 +2715,11 @@ std::system(("mkdir " + outputSaveDirectory).c_str());
 			if (bValid)
 			{
 				std::cout << "Simplified from " << nIdx / 3 << "  " << reducedIdxNum << std::endl;
-				unsigned short* data = SDOCUtil::OccluderQuad::sdocMeshBake(outputCompressSize, vp.data(), vi.data(), reducedVertNum, reducedIdxNum, quadAngle, enableBackfaceCull, counterClockWise, TerrainGridAxisPoint);
+				unsigned short* data = SDOCUtil::OccluderQuad::sdocMeshBake(outputCompressSize, vp.data(), vi.data(), reducedVertNum, reducedIdxNum, quadAngle, enableBackfaceCull, counterClockWise, TerrainGridAxisPoint, PostQuadMergeCallback);
 				return data;
 			}
 		}
-		return SDOCUtil::OccluderQuad::sdocMeshBake(outputCompressSize, vertices, indices, nVert, nIdx, quadAngle, enableBackfaceCull, counterClockWise, TerrainGridAxisPoint);
+		return SDOCUtil::OccluderQuad::sdocMeshBake(outputCompressSize, vertices, indices, nVert, nIdx, quadAngle, enableBackfaceCull, counterClockWise, TerrainGridAxisPoint, PostQuadMergeCallback);
 
 	}
 

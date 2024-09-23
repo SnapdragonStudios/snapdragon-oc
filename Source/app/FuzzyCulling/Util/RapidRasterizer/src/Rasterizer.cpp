@@ -107,6 +107,8 @@ namespace SDOCUtil
 	//once enabled, occludee would not be rasterized
 	static constexpr bool gDrawOccludeeNoRasterization = 0;
 	static constexpr int32_t gDrawOccludeeNoRasterizationAreaThreshold = 64;
+	static constexpr int32_t gDrawOccludeeNoRasterizationFlatZThreshold = 10;
+	
 
 	static constexpr bool bDrawOccludeeToDepthMap = false; //Debug function, draw all primitives in occludee to depth map. Early exit would be disabled!!!
 	static constexpr bool bForceMeshLineDebug = false;
@@ -3910,7 +3912,13 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 			__m128i dxdyArea = _mm_mul_epu32(dx, dy);
 			__m128i smallArea = _mm_cmple_epi32_soc(dxdyArea, _mm_set1_epi32(gDrawOccludeeNoRasterizationAreaThreshold));
 
-			int32_t* areaPtr = (int32_t*)&smallArea;
+			__m128 minZ = _mm_min_ps(_mm_min_ps(z[0], z[1]), _mm_min_ps(z[2], z[3]));
+			__m128i minZi = _mm_srai_epi32(_mm_castps_si128(minZ), 12);
+			__m128i deltaZ = _mm_sub_epi32(maxZi, minZi);
+			__m128i flatPolygon = _mm_cmpgt_epi32(deltaZ, _mm_set1_epi32(gDrawOccludeeNoRasterizationFlatZThreshold) );
+			__m128i smallOrFlat = _mm_or_si128(flatPolygon, smallArea);
+
+			int32_t* areaPtr = (int32_t*)&smallOrFlat;
 			//now go to query2D mode
 			do
 			{
@@ -3922,6 +3930,10 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 					int32_t* pixelBounds = ((int32_t*)pixel) + primitiveIdx;
 					if (query2D<false, false>(pixelBounds[0], pixelBounds[4], pixelBounds[8], pixelBounds[12], depthBounds[primitiveIdx]))
 					{
+						if (DebugOccluderOccludee)
+						{
+							DebugData[OccludeeRasterizeQuery2D]++;
+						}
 						occluderCache->mRasterizedOccludeeVisible = true;
 						return;
 					}
@@ -4235,6 +4247,10 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 		uint32_t blockMaxY = boundData[12];
 
 
+		if (bDrawOccludee && DebugOccluderOccludee)
+		{
+			DebugData[OccludeeRasterizeQuad]++;
+		}
 
 		float * edgeNormalsXf = (float*)edgeNormalsX + primitiveIdx;
 		float * edgeNormalsYf = (float*)edgeNormalsY + primitiveIdx;
@@ -4295,6 +4311,10 @@ void Rasterizer::drawQuad(__m128* x, __m128* y, __m128* invW, __m128* W,  __m128
 				uint32_t* lookIdx = (uint32_t*)&lookup;
 				uint32_t idxOr = lookIdx[0] | lookIdx[1] | lookIdx[2] | lookIdx[3];
 
+				if (bDrawOccludee && DebugOccluderOccludee)
+				{
+					DebugData[OccludeeRasterizeQuadBlocks]++;
+				}
 				if (idxOr > 63)
 				{	
 					//Convex Optimization 0: YesNo optimization. Stop if Block state from see to not see
@@ -6171,7 +6191,7 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 	uint32_t* depthBounds = (uint32_t*)&maxZi;
 	
 
-	__m128i minZi;
+	__m128i minZi = _mm_set1_epi32(0);
 	uint32_t* depthBoundsMin;
 
 	if (bDrawOccludee && possiblyNearClipped == false)
@@ -6246,7 +6266,12 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 			__m128i dxdyArea = _mm_mul_epu32(dx, dy);
 			__m128i smallArea = _mm_cmple_epi32_soc(dxdyArea, _mm_set1_epi32(gDrawOccludeeNoRasterizationAreaThreshold));
 
-			int32_t* areaPtr = (int32_t*)&smallArea;
+			
+			__m128i deltaZ = _mm_sub_epi32(maxZi, minZi);
+			__m128i flatPolygon = _mm_cmpgt_epi32(deltaZ, _mm_set1_epi32(gDrawOccludeeNoRasterizationFlatZThreshold));
+			__m128i smallOrFlat = _mm_or_si128(flatPolygon, smallArea);
+
+			int32_t* areaPtr = (int32_t*)&smallOrFlat;
 			//now go to query2D mode
 			do
 			{
@@ -6258,6 +6283,10 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 					int32_t* pixelBounds = ((int32_t*)pixel) + primitiveIdx;
 					if (query2D<false, false>(pixelBounds[0], pixelBounds[4], pixelBounds[8], pixelBounds[12], depthBounds[primitiveIdx]))
 					{
+						if (bDrawOccludee && DebugOccluderOccludee)
+						{
+							DebugData[OccludeeRasterizeQuery2D]++;
+						}
 						occluderCache->mRasterizedOccludeeVisible = true;
 						return;
 					}
@@ -6629,6 +6658,10 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 		depthRowDeltaBtm = _mm_min_ps(_mm_set1_ps(slope* 0.375f), depthRowDeltaBtm);
 
 
+		if (bDrawOccludee && DebugOccluderOccludee)
+		{
+			DebugData[OccludeeRasterizeTriangle]++;
+		}
 		
 		int xIncrease = (int)(depthPlaneData[4] > 0);
 		int yIncrease = (int)(slope > 0);
@@ -6725,6 +6758,10 @@ void Rasterizer::drawTriangle( __m128* x, __m128* y, __m128* invW, __m128* W,  _
 			uint32_t ConvexOffset = 0; 
 			do
 			{
+				if (bDrawOccludee && DebugOccluderOccludee)
+				{
+					DebugData[OccludeeRasterizeTriangleBlocks]++;
+				}
 
 				__m128i lookup = _mm_cvttps_epi32(offsetX);
 				offsetX = _mm_add_ps(edgeNormalX, offsetX);
