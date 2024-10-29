@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <sstream>
 
-#if defined(SDOC_ANDROID)
+#if defined(SDOC_ANDROID_ARM)
 #include <sys/stat.h>
 #include <sys/system_properties.h>
 #include <unistd.h>

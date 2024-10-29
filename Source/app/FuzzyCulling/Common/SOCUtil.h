@@ -86,7 +86,7 @@ public:
 	{
 		std::string output = SOCLogger::Singleton.OutputDir;
 		bool pathValid = true;
-#if defined(SDOC_ANDROID)
+#if defined(SDOC_ANDROID_ARM)
 		if (output.length() == 0)
 		{
 			output = "/sdcard/SOC/";

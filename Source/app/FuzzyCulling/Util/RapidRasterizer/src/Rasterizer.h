@@ -17,11 +17,11 @@
 #if defined(SDOC_IOS)
 #define PLATFORM_IOS 1
 #endif
-#if defined(SDOC_ANDROID)
-#define PLATFORM_ANDROID_ARM64 1
+#if defined(SDOC_ANDROID_ARM)
+#define PLATFORM_ANDROID_ARM 1
 #endif
 
-#if PLATFORM_WINDOWS || PLATFORM_ANDROID_ARM64 || PLATFORM_IOS
+#if PLATFORM_WINDOWS || PLATFORM_ANDROID_ARM || PLATFORM_IOS
 #include <memory>
 #include <vector>
 #include "../../../Common/MathUtil.h"

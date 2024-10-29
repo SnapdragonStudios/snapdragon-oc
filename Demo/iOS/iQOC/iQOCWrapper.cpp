@@ -488,7 +488,7 @@ std::string iterateDir(std::string path, bool  isQuick) {
 
 void ReplayFrame(SDOCLoader* dataProvider, int mode, int frameNum, int saveFrameIdx, std::string capFileName, std::ofstream* pOfstream)
 {
-#if defined(SDOC_ANDROID)
+#if defined(SDOC_ANDROID_ARM)
 	// set thread affinity
 	// common golden core: 4~6 in Snapdragon chips
 	//attempt to bind to a golden core

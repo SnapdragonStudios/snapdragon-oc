@@ -17,7 +17,7 @@
 #include "Common/SOCUtil.h"
 
 
-#if defined(SDOC_ANDROID)
+#if defined(SDOC_ANDROID_ARM)
 #include <sys/stat.h>
 #include <sys/system_properties.h>
 #include <unistd.h>
@@ -1166,7 +1166,7 @@ void SOCPrivate::startNewFrame(const float *CameraPos, const float *ViewDir, con
 		std::string folderName = inputFile.substr(0, found + 1) + "/Output/";
 #if defined(SDOC_WIN)
 		_mkdir(folderName.c_str());
-#elif defined(SDOC_ANDROID)
+#elif defined(SDOC_ANDROID_ARM)
 		mkdir(folderName.c_str(), 777);
 #endif
 

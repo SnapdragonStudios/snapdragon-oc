@@ -19,7 +19,7 @@ endif()
 add_library(Common STATIC ${SRC} ${CURRENT_HEADERS})
 
 # link
-if (SDOC_ANDROID)
+if (SDOC_ANDROID_ARM)
     target_link_libraries(Common EGL GLESv2)
 else()
     target_link_libraries(Common)

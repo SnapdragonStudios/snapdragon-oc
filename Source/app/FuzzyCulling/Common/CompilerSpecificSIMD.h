@@ -6,7 +6,7 @@
 //
 //============================================================================================================
 
-#if defined(SDOC_ANDROID) || defined(__aarch64__)
+#if defined(SDOC_ANDROID_ARM) || defined(__aarch64__)
 #include "Common/SSE2NEON.h"
 #elif defined(SDOC_NATIVE)
 #include "SSE2NEON_Win.h"

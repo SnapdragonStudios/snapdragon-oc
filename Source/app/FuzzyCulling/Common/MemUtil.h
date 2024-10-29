@@ -16,7 +16,7 @@
 #ifdef SDOC_WIN
 #include <intrin.h>
 #endif
-#ifdef SDOC_ANDROID
+#ifdef SDOC_ANDROID_ARM
 #include <byteswap.h> //GCC Clang
 #endif
 
@@ -31,7 +31,7 @@ namespace SDOCCommon
 	{
 #if defined(SDOC_WIN)
 		return _byteswap_uint64(mask); //bswap r64 is 2 uops on Intel CPUs
-#elif defined(SDOC_ANDROID)
+#elif defined(SDOC_ANDROID_ARM)
 		return bswap_64(mask);
 #else
         return _OSSwapInt64(mask);

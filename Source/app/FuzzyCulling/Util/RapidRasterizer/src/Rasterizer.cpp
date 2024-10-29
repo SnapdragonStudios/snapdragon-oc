@@ -15,12 +15,12 @@
 #if defined(SDOC_IOS)
 #define PLATFORM_IOS 1
 #endif
-#if defined(SDOC_ANDROID)
-#define PLATFORM_ANDROID_ARM64 1
+#if defined(SDOC_ANDROID_ARM)
+#define PLATFORM_ANDROID_ARM 1
 #endif
 
 
-#if PLATFORM_WINDOWS || PLATFORM_ANDROID_ARM64 || PLATFORM_IOS
+#if PLATFORM_WINDOWS || PLATFORM_ANDROID_ARM || PLATFORM_IOS
 #include "Rasterizer.h"
 
 #include <algorithm>
@@ -38,7 +38,7 @@
 #pragma warning( disable : 4996  )
 #endif
 
-#if defined(SDOC_ANDROID)
+#if defined(SDOC_ANDROID_ARM)
 #include <sys/stat.h>
 #include <sys/system_properties.h>
 #include <unistd.h>
@@ -46,7 +46,7 @@
 #endif
 using namespace SDOCCommon;
 
-#if defined(SDOC_ANDROID) || defined(__aarch64__)
+#if defined(SDOC_ANDROID_ARM) || defined(__aarch64__)
 #define SDOC_ARM
 #endif
 
@@ -75,7 +75,7 @@ namespace SDOCUtil
 
 
 	static const     float maxInvW = std::sqrt(std::numeric_limits<float>::max());
-#if defined(SDOC_ANDROID) && !defined(__aarch64__)
+#if defined(SDOC_ANDROID_ARM) && !defined(__aarch64__)
 	static constexpr bool ARMV7 = true;
 #else
 	static constexpr bool ARMV7 = false;
@@ -145,7 +145,7 @@ namespace SDOCUtil
 
 	static constexpr uint16_t MIN_UPDATED_BLOCK_DEPTH = 1;
 	static constexpr uint16_t MIN_UPDATED_BLOCK_DEPTH2 = 2;
-#if defined(SDOC_ANDROID) && !defined(__aarch64__)
+#if defined(SDOC_ANDROID_ARM) && !defined(__aarch64__)
 	static constexpr float MIN_PIXEL_DEPTH_FLOAT = 1.17549435082e-38; // ARMV7 minimal positive non denormalized number
 #else 
 	static constexpr float MIN_PIXEL_DEPTH_FLOAT = 3.44383110592e-41; // the float value of  0x00006000;

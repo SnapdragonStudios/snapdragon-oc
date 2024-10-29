@@ -25,7 +25,7 @@ message(STATUS "CMAKE_OSX_ARCHITECTURES: ${CMAKE_OSX_ARCHITECTURES}")
 #     SDOC_WIN
 #     SDOC_OSX
 # SDOC_MOBILE:
-#     SDOC_ANDROID
+#     SDOC_ANDROID_ARM
 #     SDOC_IOS
 set(SDOC_NATIVE 0)
 set(SDOC_WIN 0)
@@ -34,7 +34,8 @@ set(SDOC_OSX_ARM 0)
 set(SDOC_OSX_x86 0)
 set(SDOC_MOBILE 0)
 set(SDOC_IOS 0)
-set(SDOC_ANDROID 0)
+set(SDOC_ANDROID_ARM 0)
+set(SDOC_ANDROID_X86 0)
 
 
 
@@ -72,20 +73,37 @@ elseif ((${CMAKE_SYSTEM_NAME} STREQUAL Windows) )
     set(SDOC_WIN 1)
 
     add_definitions(-DSDOC_WIN)
-elseif ((${CMAKE_SYSTEM_NAME} STREQUAL Android) OR (${CMAKE_SYSTEM_NAME} STREQUAL iOS))
+elseif ( (${CMAKE_SYSTEM_NAME} STREQUAL iOS))
     message(STATUS "SDOC Mobile")
     set(SDOC_MOBILE 1)
     add_definitions(-DSDOC_MOBILE)
 	
     set(SDOC_LIB_EXPORT 1)
     add_definitions(-DSDOC_LIB_EXPORT)
-
-    if (${CMAKE_SYSTEM_NAME} STREQUAL Android)
-        set(SDOC_ANDROID 1)
-        add_definitions(-DSDOC_ANDROID)
+    
+    set(SDOC_IOS 1)
+    add_definitions(-DSDOC_IOS)
+elseif ((${CMAKE_SYSTEM_NAME} STREQUAL Android) )
+    if((CMAKE_ANDROID_ARCH_ABI MATCHES "armeabi.*") OR (CMAKE_ANDROID_ARCH_ABI MATCHES "arm64-v8a"))
+        message(STATUS "SDOC Mobile")
+        set(SDOC_MOBILE 1)
+        add_definitions(-DSDOC_MOBILE)
+	
+        set(SDOC_LIB_EXPORT 1)
+        add_definitions(-DSDOC_LIB_EXPORT)
+        set(SDOC_ANDROID_ARM 1)
+        add_definitions(-DSDOC_ANDROID_ARM)
     else()
-        set(SDOC_IOS 1)
-        add_definitions(-DSDOC_IOS)
+        ##developers might use ndk to build x86_64
+        message(STATUS "SDOC X86 Native")
+        set(SDOC_NATIVE 1)
+        add_definitions(-DSDOC_NATIVE)
+	
+        set(SDOC_LIB_EXPORT 1)
+        add_definitions(-DSDOC_LIB_EXPORT)
+        set(SDOC_ANDROID_X86 1)
+
+        add_definitions(-DSDOC_ANDROID_X86)
     endif()
 endif()
 
@@ -144,7 +162,7 @@ if (SDOC_IOS)
     # for iOS, set OBJCXX flags
     set(CMAKE_OBJCXX_FLAGS "${CMAKE_OBJCXX_FLAGS} -std=c++14")
     set(CMAKE_OBJCXX_FLAGS_RELEASE "${CMAKE_OBJCXX_FLAGS} -Os -fvisibility=hidden")
-elseif (SDOC_ANDROID AND SDOC_STATIC)
+elseif (SDOC_ANDROID_ARM AND SDOC_STATIC)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14 -g0")
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -Os -fvisibility=hidden -g0")
 else()
