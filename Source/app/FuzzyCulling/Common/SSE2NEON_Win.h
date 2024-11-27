@@ -27,6 +27,31 @@
 #include <algorithm>
 #pragma warning( disable : 4305  )
 #pragma warning( disable : 4309  )
+
+
+//#define  X86_AVX_FMA_SUPPORT   //uncomment this line to build for x86 with avx support
+////programmer todo : it is found that some x86 chips no avx / fma support
+////so it is desire to build two dll,
+//// one with avx support
+//// one without
+////use is_avx_supported() to check which dll should be used.
+/*
+#include <iostream>
+#include <immintrin.h> // For AVX intrinsics 
+#include <intrin.h> // For __cpuid intrinsic 
+static bool is_avx_supported() {
+	int cpuInfo[4];
+	__cpuid(cpuInfo, 1);
+	bool avxSupported = (cpuInfo[2] & (1 << 28)) != 0;
+	bool osxsaveSupported = (cpuInfo[2] & (1 << 27)) != 0;
+	if (osxsaveSupported && avxSupported) { // Check if the operating system supports AVX 
+		unsigned long long xcrFeatureMask = _xgetbv(_XCR_XFEATURE_ENABLED_MASK);
+		avxSupported = (xcrFeatureMask & 0x6) == 0x6;
+	}
+	return avxSupported;
+}
+*/
+
 namespace 
 {
 	static const __m128i mask0 = _mm_setzero_si128();
@@ -130,6 +155,7 @@ inline float _mm_dp_ps_float_soc(__m128 a, __m128 b)
 //**********************************************************************************
 //below FMA functions should never be called!!!!
 //this is to make sure all x86 platforms with SSE2 support could work
+#ifndef X86_AVX_FMA_SUPPORT
 inline __m128 _mm_fmadd_ps(const __m128& a, const __m128& b, const __m128& c)
 {
 	__m128 d = _mm_mul_ps(a, b);
@@ -158,21 +184,35 @@ inline __m128 _mm_fnmadd_ps(const __m128& a, const __m128& b, const __m128& c)
 {
 	return _mm_sub_ps(c, _mm_mul_ps(a, b));
 }
+#endif
+
 //**********************************************************************************
 //below expanded FMA functions should be called!!!!
 inline __m128 _mm_fmsub_ps_soc(const __m128& a, const __m128& b, const __m128& c)
 {
+#if defined(X86_AVX_FMA_SUPPORT)
+	return _mm_fmsub_ps(a, b, c);
+#else
 	return _mm_sub_ps(_mm_mul_ps(a, b), c);
+#endif
 }
 
 inline __m128 _mm_fmadd_ps_soc(const __m128& a, const __m128& b, const __m128& c)
 {
+#if defined(X86_AVX_FMA_SUPPORT)
+	return _mm_fmadd_ps(a, b, c);
+#else
 	return _mm_add_ps(_mm_mul_ps(a, b), c);
+#endif
 }
 
 inline __m128 _mm_fnmadd_ps_soc(const __m128& a, const __m128& b, const __m128& c)
 {
+#if defined(X86_AVX_FMA_SUPPORT)
+	return _mm_fnmadd_ps(a, b, c);
+#else
 	return _mm_sub_ps(c, _mm_mul_ps(a, b));
+#endif
 }
 //**********************************************************************************
 
